@@ -6,46 +6,84 @@
 
 html,
 body,
-#app {
+#root {
   min-height: 100%;
+}
+
+html,
+body {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body {
   font-family: 'Fira Sans', system-ui, -apple-system, sans-serif;
-  background-color: var(--color-bg);
-  color: var(--color-fg);
+  background-color: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  position: fixed;
+  inset: 0;
 }
 
 /* Tabular/monospaced figures everywhere numbers/metrics appear (px, %, hex,
-   selectors, breakpoints) — the "technical dashboard" type signature. */
+   selectors, breakpoints, the generated prompt) — the "technical dashboard"
+   type signature (mono-for-all-metrics). */
 .font-mono,
+.ddmono,
 code,
 kbd,
 pre {
   font-family: 'Fira Code', ui-monospace, SFMono-Regular, monospace;
-  font-feature-settings: 'tnum' 1, 'zero' 1;
+  font-variant-ligatures: none;
+  font-feature-settings:
+    'tnum' 1,
+    'zero' 1,
+    'ss01' 1;
 }
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: var(--color-bg);
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-elevated);
+  background: var(--track);
   border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-border);
+  background: var(--border2);
+  background-clip: padding-box;
+}
+
+/* Spinner rotation (running/queued status icons — Loader2). */
+@keyframes dd-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+.dd-spin {
+  animation: dd-spin 1s linear infinite;
 }
 
 /* Visible keyboard focus everywhere — never rely on browser default alone. */
 :focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--scan);
   outline-offset: 2px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
 }
 
 /* All interactive elements read as clickable. */

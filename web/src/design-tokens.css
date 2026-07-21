@@ -1,80 +1,187 @@
 /*
- * design-diff — Design tokens (Soft UI Evolution, dark-primary)
- * Generated from design-system/design-diff/MASTER.md, adapted:
- *  - fonts bundled locally via @fontsource (see main.ts), not the Google
- *    Fonts CDN link MASTER.md suggests — no network font requests.
- *  - shadow scale re-tuned for a dark surface (MASTER.md's shadow alphas
- *    assume a light card on a light page; on a near-black surface those
- *    are invisible, so alphas are raised while keeping the same "soft,
- *    not neumorphic" character).
- *  - an --color-on-accent token was added: white text on the #22C55E
- *    accent only reaches ~2.3:1 contrast (fails WCAG AA); dark text on
- *    the same green reaches ~7.8:1, so buttons use --color-on-accent
- *    (nearly-black) instead of white.
+ * design-diff — Design tokens ("precision design-inspection console")
+ * Ported verbatim from the design handoff
+ * (design_handoff_design_diff/README.md "Design Tokens" +
+ * design-diff.dc.html #ddroot custom-property block). Two theme blocks:
+ * dark (primary, near-black) on :root / [data-theme="dark"], and
+ * [data-theme="light"] overrides. The theme switch (see ThemeProvider)
+ * toggles `data-theme` on <html>; Tailwind's `darkMode: 'class'` additionally
+ * mirrors dark via a `.dark` class on <html> for utility variants.
+ *
+ * Fonts are bundled locally via @fontsource (see main.tsx) — no Google Fonts
+ * CDN, unlike the handoff's <helmet> which links fonts.googleapis.com.
  */
 
-:root {
-  /* Surfaces — layered slate scale, darkest to lightest */
-  --color-bg: #0f172a;
-  --color-surface: #1e293b;
-  --color-elevated: #334155;
-  --color-border: #475569;
-  --color-border-hairline: #2b3748; /* a touch darker than surface, for quiet dividers */
+:root,
+:root[data-theme='dark'] {
+  /* Surfaces */
+  --bg: #09090c;
+  --canvasbg: #050506;
+  --surface: rgba(18, 19, 24, 0.82);
+  --surface-solid: #121317;
+  --elevated: rgba(26, 28, 34, 0.94);
+  --hover: #22242c;
 
-  /* Foreground */
-  --color-fg: #f8fafc;
-  --color-fg-muted: #cbd5e1;
-  --color-fg-subtle: #94a3b8;
-  --color-fg-faint: #64748b;
+  /* Borders */
+  --border: rgba(255, 255, 255, 0.06);
+  --border2: rgba(255, 255, 255, 0.11);
+  --hair: rgba(255, 255, 255, 0.05);
 
-  /* Semantic: primary action / "match" success = green; "difference" = red */
-  --color-accent: #22c55e;
-  --color-accent-hover: #16a34a;
-  --color-accent-soft: rgba(34, 197, 94, 0.14);
-  --color-accent-border: rgba(34, 197, 94, 0.35);
-  --color-on-accent: #052e13;
+  /* Text */
+  --text: #ecedf1;
+  --text2: #8c909d;
+  --text3: #565a66;
 
-  --color-danger: #ef4444;
-  --color-danger-hover: #dc2626;
-  --color-danger-soft: rgba(239, 68, 68, 0.14);
-  --color-danger-border: rgba(239, 68, 68, 0.35);
+  /* Accent / scan (violet — action + selection + ⊕ registration) */
+  --accent: #a87bff;
+  --scan: #a87bff;
+  --accent-grad: linear-gradient(135deg, #7c5cff, #a87bff);
 
-  --color-warning: #f59e0b;
-  --color-warning-soft: rgba(245, 158, 11, 0.14);
-  --color-warning-border: rgba(245, 158, 11, 0.35);
+  /* Semantic */
+  --green: #22c55e;
+  --red: #f0525a;
+  --amber: #eea23a;
+  --info: #3ea6f0;
+  --onaccent: #ffffff;
+  --track: rgba(255, 255, 255, 0.07);
+  --pulsecol: rgba(34, 197, 94, 0.4);
+  --dot: rgba(255, 255, 255, 0.045);
 
-  --color-info: #38bdf8;
-  --color-info-soft: rgba(56, 189, 248, 0.14);
+  /* Soft fills */
+  --green-soft: rgba(34, 197, 94, 0.13);
+  --red-soft: rgba(240, 82, 90, 0.13);
+  --amber-soft: rgba(238, 162, 58, 0.14);
+  --info-soft: rgba(62, 166, 240, 0.13);
+  --scan-soft: rgba(168, 123, 255, 0.15);
 
-  /* Score bands (mirrors the API's read of a match %): green >=95, amber 85-95, red <85 */
-  --color-score-good: var(--color-accent);
-  --color-score-warn: var(--color-warning);
-  --color-score-bad: var(--color-danger);
+  /* Motion */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
 
-  /* Soft UI Evolution shadow scale (dark-surface tuned) */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.38), 0 1px 3px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 14px 32px rgba(0, 0, 0, 0.46), 0 2px 6px rgba(0, 0, 0, 0.3);
-  --shadow-xl: 0 26px 56px rgba(0, 0, 0, 0.56);
-  --shadow-inset-highlight: inset 0 1px 0 rgba(248, 250, 252, 0.04);
+  /* Shadows / elevation */
+  --sh1: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --sh2: 0 18px 50px -16px rgba(0, 0, 0, 0.78), 0 4px 14px rgba(0, 0, 0, 0.45);
+  --board-sh: 0 44px 90px -32px rgba(0, 0, 0, 0.9), 0 12px 30px rgba(0, 0, 0, 0.5);
 
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-full: 999px;
+  /* Radii */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-board: 18px;
+}
 
-  /* Motion dial 3/10 (subtle) — micro-interactions only */
-  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
-  --duration-fast: 150ms;
-  --duration-base: 220ms;
-  --duration-slow: 300ms;
+:root[data-theme='light'] {
+  --bg: #ffffff;
+  --canvasbg: #eef0f3;
+  --surface: rgba(255, 255, 255, 0.9);
+  --surface-solid: #ffffff;
+  --elevated: #ffffff;
+  --hover: #f2f4f7;
 
-  /* Dashboard density (dial 8/10): tight-but-readable spacing scale */
-  --space-3xs: 2px;
-  --space-2xs: 4px;
-  --space-xs: 8px;
-  --space-sm: 12px;
-  --space-md: 16px;
-  --space-lg: 24px;
-  --space-xl: 32px;
+  --border: rgba(18, 22, 31, 0.1);
+  --border2: rgba(18, 22, 31, 0.17);
+  --hair: rgba(18, 22, 31, 0.07);
+
+  --text: #14181f;
+  --text2: #5a616e;
+  --text3: #98a0ac;
+
+  --accent: #7c3aed;
+  --scan: #7c3aed;
+  --accent-grad: linear-gradient(135deg, #7c4de0, #9333ea);
+
+  --green: #12a150;
+  --red: #e0404c;
+  --amber: #b4770d;
+  --info: #0e7fdc;
+  --onaccent: #ffffff;
+  --track: rgba(18, 22, 31, 0.07);
+  --pulsecol: rgba(18, 161, 80, 0.32);
+  --dot: rgba(18, 22, 31, 0.05);
+
+  --green-soft: rgba(18, 161, 80, 0.1);
+  --red-soft: rgba(224, 64, 76, 0.09);
+  --amber-soft: rgba(180, 119, 13, 0.11);
+  --info-soft: rgba(14, 127, 220, 0.09);
+  --scan-soft: rgba(124, 58, 237, 0.1);
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --sh1: 0 1px 2px rgba(18, 22, 31, 0.07);
+  --sh2: 0 16px 40px -16px rgba(18, 22, 31, 0.18), 0 3px 10px rgba(18, 22, 31, 0.08);
+  --board-sh: 0 34px 66px -26px rgba(18, 22, 31, 0.24), 0 8px 20px rgba(18, 22, 31, 0.1);
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-board: 18px;
+}
+
+/* Decorative background glow drift (Glows layer) — disabled in light theme
+   (opacity 0, see Glows.tsx) and under reduced-motion (below). */
+@keyframes ddglow {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(4%, 3%) scale(1.08);
+  }
+}
+
+/* Scan-line pulse (overlay inspector handle, idle ⊕ mark, status dot). */
+@keyframes ddscanpulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Running-state scan sweep across the board thumbnail. */
+@keyframes ddsweep {
+  0% {
+    top: -30%;
+  }
+  100% {
+    top: 110%;
+  }
+}
+
+/* Fade/slide-in for callouts and the settings modal. */
+@keyframes ddfade {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Pin drop-in. */
+@keyframes ddpin {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+/* Status-dot pulse ring. */
+@keyframes ddpulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--pulsecol);
+  }
+  70% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
 }

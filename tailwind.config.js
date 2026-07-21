@@ -1,69 +1,70 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ['./web/index.html', './web/src/**/*.{vue,js,ts,jsx,tsx}'],
+  content: ['./web/index.html', './web/src/**/*.{js,ts,jsx,tsx}'],
+  // useTheme.ts mirrors the `data-theme` attribute switch onto a `.dark`
+  // class on <html> specifically so the plain 'class' strategy here stays
+  // valid Tailwind syntax and in sync with the theme toggle.
   darkMode: 'class',
   theme: {
     extend: {
       colors: {
-        // Legacy base.* scale kept for any stray reference; new code should
-        // prefer the semantic tokens below (bg/surface/elevated/border/fg).
-        base: {
-          950: '#0a0a0f',
-          900: '#121218',
-          800: '#1a1a23',
-          700: '#26262f',
-          600: '#33333f',
-        },
-        bg: 'var(--color-bg)',
-        surface: 'var(--color-surface)',
-        elevated: 'var(--color-elevated)',
+        bg: 'var(--bg)',
+        canvasbg: 'var(--canvasbg)',
+        surface: 'var(--surface)',
+        'surface-solid': 'var(--surface-solid)',
+        elevated: 'var(--elevated)',
+        hover: 'var(--hover)',
         border: {
-          DEFAULT: 'var(--color-border)',
-          hairline: 'var(--color-border-hairline)',
+          DEFAULT: 'var(--border)',
+          2: 'var(--border2)',
         },
-        fg: {
-          DEFAULT: 'var(--color-fg)',
-          muted: 'var(--color-fg-muted)',
-          subtle: 'var(--color-fg-subtle)',
-          faint: 'var(--color-fg-faint)',
+        hair: 'var(--hair)',
+        text: {
+          DEFAULT: 'var(--text)',
+          2: 'var(--text2)',
+          3: 'var(--text3)',
         },
         accent: {
-          DEFAULT: 'var(--color-accent)',
-          hover: 'var(--color-accent-hover)',
-          soft: 'var(--color-accent-soft)',
-          border: 'var(--color-accent-border)',
-          on: 'var(--color-on-accent)',
+          DEFAULT: 'var(--accent)',
+          on: 'var(--onaccent)',
         },
-        danger: {
-          DEFAULT: 'var(--color-danger)',
-          hover: 'var(--color-danger-hover)',
-          soft: 'var(--color-danger-soft)',
-          border: 'var(--color-danger-border)',
+        scan: 'var(--scan)',
+        green: {
+          DEFAULT: 'var(--green)',
+          soft: 'var(--green-soft)',
         },
-        warning: {
-          DEFAULT: 'var(--color-warning)',
-          soft: 'var(--color-warning-soft)',
-          border: 'var(--color-warning-border)',
+        red: {
+          DEFAULT: 'var(--red)',
+          soft: 'var(--red-soft)',
+        },
+        amber: {
+          DEFAULT: 'var(--amber)',
+          soft: 'var(--amber-soft)',
         },
         info: {
-          DEFAULT: 'var(--color-info)',
-          soft: 'var(--color-info-soft)',
+          DEFAULT: 'var(--info)',
+          soft: 'var(--info-soft)',
         },
+        'scan-soft': 'var(--scan-soft)',
+        track: 'var(--track)',
+      },
+      backgroundImage: {
+        'accent-grad': 'var(--accent-grad)',
       },
       fontFamily: {
         sans: ['"Fira Sans"', 'system-ui', '-apple-system', 'sans-serif'],
         mono: ['"Fira Code"', 'ui-monospace', 'SFMono-Regular', 'monospace'],
       },
       borderRadius: {
-        sm: 'var(--radius-sm)',
-        md: 'var(--radius-md)',
-        lg: 'var(--radius-lg)',
+        sm: 'var(--r-sm)',
+        md: 'var(--r-md)',
+        lg: 'var(--r-lg)',
+        board: 'var(--r-board)',
       },
       boxShadow: {
-        soft: 'var(--shadow-sm), var(--shadow-inset-highlight)',
-        'soft-md': 'var(--shadow-md), var(--shadow-inset-highlight)',
-        'soft-lg': 'var(--shadow-lg), var(--shadow-inset-highlight)',
-        'soft-xl': 'var(--shadow-xl), var(--shadow-inset-highlight)',
+        sh1: 'var(--sh1)',
+        sh2: 'var(--sh2)',
+        board: 'var(--board-sh)',
       },
       transitionDuration: {
         fast: '150ms',
@@ -71,7 +72,7 @@ export default {
         slow: '300ms',
       },
       transitionTimingFunction: {
-        standard: 'cubic-bezier(0.4, 0, 0.2, 1)',
+        dd: 'cubic-bezier(0.22, 1, 0.36, 1)',
       },
     },
   },

@@ -9,3 +9,9 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 NUL
+.claude/settings.local.json
+.playwright-mcp/
+
+# ad-hoc manual QA screenshots (root-level, not project assets)
+/*.png
+/*.jpg

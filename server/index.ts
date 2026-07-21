@@ -7,7 +7,9 @@ import cors from 'cors';
 import multer from 'multer';
 import { z } from 'zod';
 
+import { basicAuth } from './basicAuth.js';
 import { fetchFigmaReferenceImage, FigmaConfigError, FigmaApiError } from './figma.js';
+import { importFigmaFile } from './figmaImport.js';
 import { createJob, getJob, requestCancel, runJob, setReferenceImageBuffer, subscribeJob } from './jobs.js';
 import type { RunJobParams } from './jobs.js';
 import {
@@ -30,6 +32,7 @@ const WEB_DIST_DIR = path.join(ROOT_DIR, 'web', 'dist');
 const PORT = Number(process.env.PORT ?? 3000);
 
 const app = express();
+app.use(basicAuth);
 app.use(cors());
 // Settings/secrets endpoints (GET/PUT JSON, DELETE no body) need a JSON body
 // parser; /api/compare stays multipart (multer) and is untouched by this —
@@ -381,6 +384,53 @@ app.delete('/api/settings/tokens/:id', (req, res) => {
   const sessionId = ensureSessionId(req, res);
   deleteToken(req.params.id, sessionId, DEFAULT_PROFILE_ID);
   res.json(getSecretsView(sessionId, DEFAULT_PROFILE_ID));
+});
+
+// --- Route: POST /api/figma/import (Feature 4) ------------------------------
+//
+// Drop a full Figma frame -> a real, working HTML+CSS preview (written under
+// runs/figma-<id>/, servable via the existing /runs static mount) + a
+// deterministic step-by-step implementation prompt + a flat per-block list.
+// Entirely local + deterministic except for the one Figma REST call — no
+// Claude/Anthropic call of any kind (see server/figmaImport.ts header).
+// Token resolution mirrors POST /api/compare's figma branch exactly
+// (session -> persisted -> .env), and error handling reuses the same
+// FigmaConfigError/FigmaApiError classes so both features degrade the same way.
+
+const figmaImportBodySchema = z.object({ figmaUrl: z.string().url() });
+
+app.post('/api/figma/import', async (req, res) => {
+  const parsed = figmaImportBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid request', issues: parsed.error.issues });
+    return;
+  }
+
+  const sessionId = ensureSessionId(req, res);
+  const token = resolveFigmaToken(sessionId, DEFAULT_PROFILE_ID);
+  if (!token) {
+    res.status(400).json({
+      error:
+        'Figma-токен не найден. Откройте Настройки и добавьте личный токен Figma (Figma → Settings → Security → Personal access tokens), либо задайте FIGMA_TOKEN в .env.',
+    });
+    return;
+  }
+
+  try {
+    const result = await importFigmaFile(parsed.data.figmaUrl, token, RUNS_DIR);
+    res.json(result);
+  } catch (err) {
+    if (err instanceof FigmaConfigError) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    if (err instanceof FigmaApiError) {
+      res.status(502).json({ error: err.message });
+      return;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `Не удалось импортировать Figma-файл: ${message}` });
+  }
 });
 
 // --- Route: GET /api/jobs/:id/events (SSE) ---------------------------------

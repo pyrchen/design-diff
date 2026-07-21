@@ -1,0 +1,12 @@
+node_modules
+web/dist
+dist-server
+runs
+.git
+.playwright-mcp
+.claude
+*.png
+*.jpg
+.env
+.secrets.json
+docs

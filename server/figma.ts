@@ -98,8 +98,13 @@ interface FigmaFileResponse {
   document?: { children?: FigmaNode[] };
 }
 
-/** node-id is missing from the URL: fall back to the first top-level frame in the file. */
-async function resolveFirstTopLevelFrameId(fileKey: string, token: string): Promise<string> {
+/**
+ * node-id is missing from the URL: fall back to the first top-level frame in
+ * the file. Exported (additive) so server/figmaImport.ts (Figma-import
+ * feature) can reuse the exact same fallback instead of re-implementing its
+ * own "find a frame to operate on" walk.
+ */
+export async function resolveFirstTopLevelFrameId(fileKey: string, token: string): Promise<string> {
   const res = await fetch(buildFileRequestUrl(fileKey), { headers: buildAuthHeaders(token) });
   if (!res.ok) {
     throw new FigmaApiError(

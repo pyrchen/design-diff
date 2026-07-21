@@ -129,6 +129,20 @@ npm run test:figma
 Express отдаёт статические фикстуры по адресам вида `http://localhost:3000/fixtures/a.html` —
 удобно для офлайн-проверки пайплайна без выхода в интернет.
 
+## Интеграция с Claude (CLI-гейт + MCP-сервер)
+
+Тот же движок (`server/jobs.ts`) доступен ещё двумя способами, оба переиспользуют пайплайн один в
+один и не требуют `ANTHROPIC_API_KEY` — LLM работает только на стороне клиента (Claude
+Code/Desktop, ваша подписка), сам инструмент остаётся полностью локальным:
+
+- `npm run verify -- --ref <url> --target <url> [--threshold 90]` — детерминированный gate
+  (exit code 0/1/2) для pre-commit хука, CI или скрипта.
+- `npx tsx server/mcp.ts` — MCP stdio-сервер с инструментами `compare`/`verify`, которые Claude
+  Code/Desktop может вызывать напрямую (`claude mcp add design-diff -- npx tsx server/mcp.ts`).
+
+Подробности, аргументы CLI и пример регистрации `.mcp.json` — в
+[`docs/CLAUDE-INTEGRATION.md`](docs/CLAUDE-INTEGRATION.md).
+
 ## Известные ограничения
 
 - Матчинг элементов (Feature 2) — жадный O(n·m) по значимым элементам (текст → похожесть текста →

@@ -30,7 +30,14 @@ function pruneCaptureOptions(a: CaptureOptions): CaptureOptions | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-export async function compare(params: CompareParams): Promise<CompareResponse> {
+/**
+ * Builds the multipart body shared by both the synchronous compare() below
+ * and the streaming client (lib/jobStream.ts) — the two are the exact same
+ * request shape, differing only in whether `stream=true` is added and how
+ * the response is consumed (JSON body vs 202 + SSE), matching the server's
+ * "one pipeline, two response modes" contract (server/index.ts).
+ */
+export function buildCompareFormData(params: CompareParams): FormData {
   const formData = new FormData();
   formData.set('referenceType', params.referenceType);
   if (params.referenceUrl) formData.set('referenceUrl', params.referenceUrl);
@@ -45,6 +52,12 @@ export async function compare(params: CompareParams): Promise<CompareResponse> {
 
   const targetCapture = params.targetCapture ? pruneCaptureOptions(params.targetCapture) : undefined;
   if (targetCapture) formData.set('targetCapture', JSON.stringify(targetCapture));
+
+  return formData;
+}
+
+export async function compare(params: CompareParams): Promise<CompareResponse> {
+  const formData = buildCompareFormData(params);
 
   const res = await fetch('/api/compare', {
     method: 'POST',

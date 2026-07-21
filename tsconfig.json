@@ -13,6 +13,6 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["server/**/*.ts"],
+  "include": ["server/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "web", "runs"]
 }

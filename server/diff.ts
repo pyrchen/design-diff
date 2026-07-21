@@ -8,22 +8,29 @@ export interface DiffResult {
   numDiffPixels: number;
   diffPng: Buffer;
   hotRegions: HotRegion[];
+  width: number;
+  height: number;
 }
+
+// Engine Phase-1: exported so DiffProvenance (jobs.ts) reports the exact
+// values actually used, rather than duplicating magic numbers.
+export const PIXELMATCH_THRESHOLD = 0.1;
+export const PIXELMATCH_INCLUDE_AA = false;
 
 export async function computeDiff(ref: RawImage, target: RawImage): Promise<DiffResult> {
   const { width, height } = ref;
   const out = Buffer.alloc(width * height * 4);
 
   const numDiffPixels = pixelmatch(ref.data, target.data, out, width, height, {
-    threshold: 0.1,
-    includeAA: false,
+    threshold: PIXELMATCH_THRESHOLD,
+    includeAA: PIXELMATCH_INCLUDE_AA,
   });
 
   const score = width * height > 0 ? 1 - numDiffPixels / (width * height) : 1;
   const diffPng = await sharp(out, { raw: { width, height, channels: 4 } }).png().toBuffer();
   const hotRegions = computeHotRegions(out, width, height);
 
-  return { score, numDiffPixels, diffPng, hotRegions };
+  return { score, numDiffPixels, diffPng, hotRegions, width, height };
 }
 
 // --- Feature 2: connected-component hot regions -----------------------------

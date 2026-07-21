@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<title>Fixture — tall page, sticky header, lazy content (full-scroll capture)</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #101828; }
+  header#sticky-header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: #0f62fe;
+    color: #ffffff;
+    padding: 16px 24px;
+    font-weight: 700;
+    font-size: 18px;
+  }
+  .section {
+    height: 700px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    border-bottom: 1px solid rgba(0,0,0,0.08);
+  }
+  .section:nth-child(odd) { background: #f2f4f7; }
+  .section:nth-child(even) { background: #ffffff; }
+  #lazy-section {
+    height: 400px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    background: #ecfdf3;
+    color: #067647;
+  }
+</style>
+</head>
+<body>
+  <header id="sticky-header">STICKY-HEADER-MARKER — должен встретиться в скриншоте один раз</header>
+
+  <div class="section">Секция 1</div>
+  <div class="section">Секция 2</div>
+  <div class="section">Секция 3</div>
+  <div class="section">Секция 4</div>
+
+  <div id="lazy-section" data-loaded="false">Прокрутите вниз, чтобы загрузить контент…</div>
+
+  <div class="section">Секция 5 (после lazy)</div>
+
+  <script>
+    var lazySection = document.getElementById('lazy-section');
+    var observer = new IntersectionObserver(function (entries) {
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].isIntersecting) {
+          lazySection.textContent = 'LAZY-CONTENT-LOADED-MARKER';
+          lazySection.dataset.loaded = 'true';
+        }
+      }
+    }, { threshold: 0.1 });
+    observer.observe(lazySection);
+  </script>
+</body>
+</html>

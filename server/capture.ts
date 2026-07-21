@@ -41,22 +41,20 @@ function hostnameOf(url: string): string | undefined {
 }
 
 /**
- * Opens a fresh, isolated browser context+page against a URL at the given
- * viewport, applies the Job-1 per-side robustness options (auth, wait
- * controls, animation freezing, dismiss/hide selectors), and waits for the
- * page to settle. Caller must invoke close().
- *
- * `options` is scoped to THIS side only (reference or target) — auth
- * (cookies/headers/httpCredentials) is applied exclusively to this
- * browser context and never leaks to the other side's context.
+ * Opens a fresh, isolated browser context+page and navigates to `url`
+ * (Engine Phase-1 `navigate` phase). Applies auth (cookies/headers/http
+ * credentials) scoped to THIS side's context only — never leaks to the
+ * other side's context. Caller must invoke close() eventually and should
+ * follow up with settlePage() before capturing (see openPage() below for
+ * the combined convenience call).
  */
-export async function openPage(
+export async function openPageNavigate(
   browser: Browser,
   url: string,
   viewport: ViewportSize,
   options: CaptureOptions = {},
 ): Promise<OpenedPage> {
-  const { hideSelectors, dismissSelectors, waitUntil, waitMs, waitForSelector, freezeAnimations = true, auth } = options;
+  const { waitUntil, freezeAnimations = true, auth } = options;
 
   const context = await browser.newContext({
     viewport,
@@ -88,6 +86,21 @@ export async function openPage(
 
   await page.goto(url, { waitUntil: waitUntil ?? DEFAULT_WAIT_UNTIL, timeout: 30000 });
 
+  return {
+    page,
+    close: () => context.close(),
+  };
+}
+
+/**
+ * Post-navigation settle (Engine Phase-1 `settle` phase): animation
+ * freezing, waiting for a required selector, dismissing overlays, hiding
+ * noisy selectors, and a final fixed wait. Split out of openPage() so the
+ * job pipeline can emit separate `navigate`/`settle` telemetry steps.
+ */
+export async function settlePage(page: Page, options: CaptureOptions = {}): Promise<void> {
+  const { hideSelectors, dismissSelectors, waitMs, waitForSelector, freezeAnimations = true } = options;
+
   if (freezeAnimations) {
     await page.addStyleTag({ content: FREEZE_ANIMATIONS_CSS });
   }
@@ -115,36 +128,147 @@ export async function openPage(
   }
 
   await page.waitForTimeout(waitMs ?? DEFAULT_WAIT_MS);
-
-  return {
-    page,
-    close: () => context.close(),
-  };
 }
 
-/** Scrolls to the bottom in steps (to trigger lazy-loaded content), then back to top. */
-async function triggerLazyLoad(page: Page): Promise<void> {
+/**
+ * Convenience wrapper: navigate + settle in one call, preserving the
+ * pre-Phase-1 openPage() behavior/signature exactly (byte-for-byte) for any
+ * caller that doesn't need per-phase telemetry granularity.
+ */
+export async function openPage(
+  browser: Browser,
+  url: string,
+  viewport: ViewportSize,
+  options: CaptureOptions = {},
+): Promise<OpenedPage> {
+  const opened = await openPageNavigate(browser, url, viewport, options);
+  await settlePage(opened.page, options);
+  return opened;
+}
+
+// --- Engine Phase-1: full-scroll settle sequence -----------------------
+//
+// shortcut: per the tsx/esbuild `keepNames` constraint (see styles.ts), every
+// page.evaluate() closure below is FLAT — no named inner function/const-arrow,
+// only value bindings, for/while loops, if/else and INLINE anonymous
+// callbacks (esbuild never `__name`-wraps those). The surrounding Node
+// functions (settleLazyLoad, settleFontsAndImages, neutralizeStickyAndFixed)
+// are normal module code and are unaffected.
+
+export interface FullPageSettleOptions {
+  /** Pin position:fixed|sticky elements to `absolute` at their current document offset before the fullPage capture, so a bar renders once instead of repeating in the stitched screenshot. Default true. */
+  neutralizeSticky?: boolean;
+  /** When neutralizing, leave the FIRST position:fixed element alone (e.g. to keep a single top bar exactly as rendered). Default false. */
+  keepFirstFixedBar?: boolean;
+  /** Bounded lazy-load scroll pass cap — defeats infinite-scroll pages that would otherwise never "reach the bottom". Default 8. */
+  maxLazyLoadPasses?: number;
+  /** Skip the settle sequence entirely (caller already ran settleForFullPageCapture() as its own telemetry phase). Default false. */
+  skipSettle?: boolean;
+}
+
+const DEFAULT_MAX_LAZY_LOAD_PASSES = 8;
+
+/**
+ * Scrolls down in viewport-height steps (bounded by maxPasses, so an
+ * infinite-scroll page can't loop forever) to trigger lazy-loaded content,
+ * then returns to the top.
+ */
+async function settleLazyLoad(page: Page, maxPasses: number): Promise<void> {
+  await page.evaluate(
+    async ({ maxPasses }) => {
+      let pass = 0;
+      let lastHeight = 0;
+      while (pass < maxPasses) {
+        window.scrollBy(0, window.innerHeight);
+        await new Promise((resolve) => window.setTimeout(resolve, 150));
+        const currentHeight = document.body.scrollHeight;
+        const atBottom = window.scrollY + window.innerHeight >= currentHeight - 2;
+        if (atBottom && currentHeight === lastHeight) break;
+        lastHeight = currentHeight;
+        pass++;
+      }
+      window.scrollTo(0, 0);
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
+    },
+    { maxPasses },
+  );
+}
+
+/** Waits for web fonts + forces lazy `<img>`s to eager-load and decode, so the capture doesn't race unloaded assets. */
+async function settleFontsAndImages(page: Page): Promise<void> {
   await page.evaluate(async () => {
-    await new Promise<void>((resolve) => {
-      let total = 0;
-      const step = 600;
-      const timer = window.setInterval(() => {
-        const scrollHeight = document.body.scrollHeight;
-        window.scrollBy(0, step);
-        total += step;
-        if (total >= scrollHeight + step) {
-          window.clearInterval(timer);
-          resolve();
-        }
-      }, 120);
-    });
+    const imgs = Array.from(document.querySelectorAll('img'));
+    for (const img of imgs) {
+      if (img.loading === 'lazy') img.loading = 'eager';
+      if (img.dataset && img.dataset.src && !img.src) img.src = img.dataset.src;
+    }
+    const decodePromises: Promise<void>[] = [];
+    for (const img of imgs) {
+      if (typeof img.decode === 'function') {
+        decodePromises.push(img.decode().catch(() => undefined));
+      }
+    }
+    await Promise.all(decodePromises);
+    if (document.fonts && document.fonts.ready) {
+      await document.fonts.ready;
+    }
   });
-  await page.waitForTimeout(300);
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.waitForTimeout(200);
 }
 
-export async function screenshot(page: Page, fullPage: boolean, clipSelector?: string): Promise<Buffer> {
+/**
+ * Pins every `position:fixed|sticky` element to `absolute` at its current
+ * document offset, so a sticky header / fixed cookie bar renders exactly
+ * once in a fullPage screenshot instead of being repainted at every tile
+ * boundary Chromium's full-page capture can produce on tall documents.
+ */
+async function neutralizeStickyAndFixed(page: Page, keepFirstFixedBar: boolean): Promise<void> {
+  await page.evaluate(
+    ({ keepFirstFixedBar }) => {
+      const all = Array.from(document.querySelectorAll('body *'));
+      let firstFixedHandled = false;
+      for (const raw of all) {
+        const el = raw as HTMLElement;
+        const cs = window.getComputedStyle(el);
+        if (cs.position !== 'fixed' && cs.position !== 'sticky') continue;
+
+        if (keepFirstFixedBar && cs.position === 'fixed' && !firstFixedHandled) {
+          firstFixedHandled = true;
+          continue;
+        }
+
+        const rect = el.getBoundingClientRect();
+        const docTop = rect.top + window.scrollY;
+        const docLeft = rect.left + window.scrollX;
+        el.style.setProperty('position', 'absolute', 'important');
+        el.style.setProperty('top', `${docTop}px`, 'important');
+        el.style.setProperty('left', `${docLeft}px`, 'important');
+      }
+    },
+    { keepFirstFixedBar },
+  );
+}
+
+/**
+ * The full-page settle sequence (Engine Phase-1 `scroll` phase): bounded
+ * lazy-load scroll → font+image settle → sticky/fixed neutralization.
+ * Exported separately so the job pipeline can run it as its own telemetry
+ * phase, distinct from the pixel capture itself.
+ */
+export async function settleForFullPageCapture(page: Page, settleOptions: FullPageSettleOptions = {}): Promise<void> {
+  const { neutralizeSticky = true, keepFirstFixedBar = false, maxLazyLoadPasses = DEFAULT_MAX_LAZY_LOAD_PASSES } = settleOptions;
+  await settleLazyLoad(page, maxLazyLoadPasses);
+  await settleFontsAndImages(page);
+  if (neutralizeSticky) {
+    await neutralizeStickyAndFixed(page, keepFirstFixedBar);
+  }
+}
+
+export async function screenshot(
+  page: Page,
+  fullPage: boolean,
+  clipSelector?: string,
+  settleOptions: FullPageSettleOptions = {},
+): Promise<Buffer> {
   if (clipSelector) {
     const handle = await page.$(clipSelector);
     if (!handle) {
@@ -156,8 +280,8 @@ export async function screenshot(page: Page, fullPage: boolean, clipSelector?: s
     }
     return handle.screenshot();
   }
-  if (fullPage) {
-    await triggerLazyLoad(page);
+  if (fullPage && !settleOptions.skipSettle) {
+    await settleForFullPageCapture(page, settleOptions);
   }
   return page.screenshot({ fullPage });
 }

@@ -2,11 +2,14 @@ import type {
   BreakpointError,
   BreakpointResult,
   CompareResponse,
+  DiffProvenance,
   ElementDiffEntry,
   HotRegion,
+  ParityReport,
   StyleDiffEntry,
 } from './types.js';
 import { isBreakpointError } from './types.js';
+import { describeDivergence } from './state.js';
 
 export type PromptInput = Omit<CompareResponse, 'claudePrompt'>;
 
@@ -78,6 +81,26 @@ function formatElementDiffLine(e: ElementDiffEntry): string {
   return `- ${e.label}: ${parts.join('; ')}`;
 }
 
+// --- Engine Phase-1: state-parity trust banner + provenance footer --------
+
+/** Prepended when parity.status==='mismatch' — names which side had which overlay open/closed and notes the quarantine. */
+function formatStateMismatchBanner(parity: ParityReport, untrusted: boolean | undefined): string[] {
+  const lines: string[] = [];
+  lines.push('> **STATE-MISMATCH:** перед сравнением состояния сторон не совпадали — часть результата может быть артефактом состояния, а не дизайна.');
+  for (const d of parity.divergences) {
+    lines.push(`>   - ${describeDivergence(d)}`);
+  }
+  if (untrusted) {
+    lines.push('>   - зоны, пересекающиеся с этими расхождениями, исключены из hot-regions/element-diff ниже (parityGate=flag, quarantine).');
+  }
+  return lines;
+}
+
+/** "By what means" trust footer — the settings the diff for this breakpoint was actually produced under. */
+function formatProvenanceLine(p: DiffProvenance): string {
+  return `- Provenance: pixelThreshold=${p.pixelThreshold}, includeAA=${p.includeAA}, alignment=${p.alignment}, elementMatch=${p.elementMatch}, manifestHash=${p.stateManifestHash ?? 'n/a'}, refHeight=${p.refHeight}px, targetHeight=${p.targetHeight}px`;
+}
+
 function scoreBadge(score: number): string {
   const pct = Math.round(score * 100);
   if (pct >= 95) return `${pct}% (хорошо)`;
@@ -113,8 +136,17 @@ export function buildClaudePrompt(run: PromptInput): string {
   lines.push('');
   for (const bp of sorted) {
     lines.push(`### ${bp.breakpoint}px — совпадение ${scoreBadge(bp.score)}`);
+
+    if (bp.parity && bp.parity.status === 'mismatch') {
+      lines.push(...formatStateMismatchBanner(bp.parity, bp.untrusted));
+    }
+
     lines.push(`- Зона концентрации различий: ${describeHotRegions(bp.hotRegions)} (${bp.hotRegions.length} обл.)`);
     lines.push(`- Изображения: \`${bp.refImg}\` (референс), \`${bp.targetImg}\` (цель), \`${bp.diffImg}\` (diff)`);
+
+    if (bp.provenance) {
+      lines.push(formatProvenanceLine(bp.provenance));
+    }
 
     if (bp.elementDiffs.length > 0) {
       lines.push('- Расхождения по элементам (surgical, приоритет — сверху):');

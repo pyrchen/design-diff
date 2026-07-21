@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<title>Fixture — modal dialog (state parity)</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Arial, Helvetica, sans-serif; background: #ffffff; color: #101828; }
+  .page { padding: 48px 24px; max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 28px; margin: 0 0 16px; }
+  p { font-size: 16px; line-height: 1.6; color: #475467; }
+  button#open-modal-btn {
+    margin-top: 16px;
+    padding: 12px 24px;
+    background: #0f62fe;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    font-size: 15px;
+    cursor: pointer;
+  }
+  dialog#delete-confirm {
+    border: none;
+    border-radius: 10px;
+    padding: 32px;
+    width: 360px;
+    box-shadow: 0 20px 40px rgba(16, 24, 40, 0.25);
+  }
+  dialog#delete-confirm::backdrop {
+    background: rgba(16, 24, 40, 0.5);
+  }
+  dialog#delete-confirm h2 { margin: 0 0 12px; font-size: 20px; }
+  dialog#delete-confirm p { margin: 0 0 24px; }
+  dialog#delete-confirm .actions { display: flex; gap: 12px; justify-content: flex-end; }
+  dialog#delete-confirm button {
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-size: 14px;
+    border: 1px solid #d0d5dd;
+    background: #ffffff;
+    cursor: pointer;
+  }
+  dialog#delete-confirm button.danger {
+    background: #d92d20;
+    border-color: #d92d20;
+    color: #ffffff;
+  }
+</style>
+</head>
+<body>
+  <div class="page">
+    <h1>Fixture — модальное окно (state parity)</h1>
+    <p>Эта страница используется для проверки авто-обнаружения оверлеев (Engine Phase-1 state parity). Добавьте <code>?open=1</code> к URL, чтобы диалог открылся автоматически при загрузке.</p>
+    <button id="open-modal-btn" type="button">Удалить аккаунт</button>
+  </div>
+
+  <dialog id="delete-confirm" aria-modal="true">
+    <h2 id="delete-confirm-heading">Удалить аккаунт?</h2>
+    <p>Это действие необратимо. Все данные будут потеряны.</p>
+    <div class="actions">
+      <button id="delete-cancel-btn" type="button">Отмена</button>
+      <button id="delete-confirm-btn" class="danger" type="button">Удалить</button>
+    </div>
+  </dialog>
+
+  <script>
+    var dialog = document.getElementById('delete-confirm');
+    var openBtn = document.getElementById('open-modal-btn');
+    var cancelBtn = document.getElementById('delete-cancel-btn');
+
+    openBtn.addEventListener('click', function () {
+      dialog.showModal();
+    });
+    cancelBtn.addEventListener('click', function () {
+      dialog.close();
+    });
+
+    var params = new URLSearchParams(window.location.search);
+    if (params.get('open') === '1') {
+      dialog.showModal();
+    }
+  </script>
+</body>
+</html>

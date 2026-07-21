@@ -5,27 +5,12 @@ import fs from 'node:fs/promises';
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
-import sharp from 'sharp';
 import { z } from 'zod';
-import type { Browser } from 'playwright';
 
-import { launchBrowser, openPage, screenshot } from './capture.js';
-import { normalizeUrlPair, normalizeImageAgainstTarget } from './normalize.js';
-import { computeDiff } from './diff.js';
-import { captureDesignSnapshot, diffDesignSnapshots, diffElements } from './styles.js';
-import { buildClaudePrompt } from './prompt.js';
 import { fetchFigmaReferenceImage, FigmaConfigError, FigmaApiError } from './figma.js';
-import type {
-  BreakpointOutcome,
-  BreakpointResult,
-  CaptureOptions,
-  CompareResponse,
-  DesignSnapshot,
-  ElementDiffEntry,
-  ReferenceType,
-  StyleDiffEntry,
-} from './types.js';
-import { isBreakpointError } from './types.js';
+import { createJob, getJob, requestCancel, runJob, setReferenceImageBuffer, subscribeJob } from './jobs.js';
+import type { RunJobParams } from './jobs.js';
+import type { CaptureOptions, CompareResponse, JobEvent, StateManifest } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -113,6 +98,43 @@ function captureOptionsField(fieldName: string) {
     });
 }
 
+// Engine Phase-1: StateManifest validation (state-parity request field).
+const ASSERT_STATE_VALUES = ['visible', 'hidden', 'attached', 'detached', 'expanded', 'collapsed', 'focused', 'count', 'text'] as const;
+
+const stateAssertionSchema = z.object({
+  selector: z.string().min(1),
+  expect: z.enum(ASSERT_STATE_VALUES),
+  value: z.union([z.string(), z.number()]).optional(),
+  label: z.string().optional(),
+});
+
+const stateManifestSchema = z.object({
+  route: z.object({ path: z.string().optional(), hash: z.string().optional() }).optional(),
+  viewport: z.object({ width: z.number(), height: z.number().optional() }).optional(),
+  scroll: z.union([z.literal('top'), z.literal('bottom'), z.number(), z.object({ selector: z.string() })]).optional(),
+  expectOpen: z.array(z.string()).optional(),
+  expectClosed: z.array(z.string()).optional(),
+  assertions: z.array(stateAssertionSchema).optional(),
+  enumerateOverlays: z.boolean().optional(),
+});
+
+const stateManifestField = z
+  .string()
+  .optional()
+  .transform((s, ctx) => {
+    if (!s || s.trim() === '') return undefined;
+    try {
+      const parsed = JSON.parse(s);
+      return stateManifestSchema.parse(parsed);
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `stateManifest must be a JSON object matching StateManifest: ${err instanceof Error ? err.message : String(err)}`,
+      });
+      return z.NEVER;
+    }
+  });
+
 const compareBodySchema = z
   .object({
     referenceType: z.enum(['url', 'image', 'figma']),
@@ -142,6 +164,15 @@ const compareBodySchema = z
     referenceCapture: captureOptionsField('referenceCapture'),
     targetCapture: captureOptionsField('targetCapture'),
     advanced: captureOptionsField('advanced'),
+    // Engine Phase-1: streaming + state-parity. All additive/optional —
+    // absent stream/parityGate fall back to the pre-Phase-1 synchronous
+    // contract exactly.
+    stream: z
+      .string()
+      .optional()
+      .transform((s) => s === 'true'),
+    stateManifest: stateManifestField,
+    parityGate: z.enum(['off', 'flag', 'block']).optional().default('flag'),
   })
   .refine((data) => data.referenceType !== 'url' || !!data.referenceUrl, {
     message: 'referenceUrl is required when referenceType is "url"',
@@ -170,109 +201,14 @@ function makeRunId(targetUrl: string): string {
   return `${runCounter}-${slugify(targetUrl)}-${Date.now()}`;
 }
 
-// --- Per-breakpoint pipeline -----------------------------------------------
-
-interface BreakpointContext {
-  browser: Browser;
-  bp: number;
-  runDir: string;
-  runId: string;
-  referenceType: ReferenceType;
-  referenceUrl: string | undefined;
-  targetUrl: string;
-  fullPage: boolean;
-  referenceImageBuffer: Buffer | undefined;
-  // Job 1: each side carries its own capture+auth options, applied to ITS
-  // OWN Playwright context only — see openPage() in capture.ts.
-  referenceCaptureOptions: CaptureOptions | undefined;
-  targetCaptureOptions: CaptureOptions | undefined;
-}
-
-async function processBreakpoint(ctx: BreakpointContext): Promise<BreakpointOutcome> {
-  const {
-    browser,
-    bp,
-    runDir,
-    runId,
-    referenceType,
-    referenceUrl,
-    targetUrl,
-    fullPage,
-    referenceImageBuffer,
-    referenceCaptureOptions,
-    targetCaptureOptions,
-  } = ctx;
-  const viewport = { width: bp, height: 900 };
-  const targetClipSelector = targetCaptureOptions?.clipSelector;
-  const referenceClipSelector = referenceCaptureOptions?.clipSelector;
-
-  try {
-    let targetPng: Buffer;
-    let refPng: Buffer;
-    let styleDiff: StyleDiffEntry[] = [];
-    let elementDiffs: ElementDiffEntry[] = [];
-
-    if (referenceType === 'url') {
-      const [targetOpened, refOpened] = await Promise.all([
-        openPage(browser, targetUrl, viewport, targetCaptureOptions),
-        openPage(browser, referenceUrl as string, viewport, referenceCaptureOptions),
-      ]);
-      try {
-        const targetPngResult = await screenshot(targetOpened.page, fullPage, targetClipSelector);
-        const targetSnapshot: DesignSnapshot = await captureDesignSnapshot(targetOpened.page);
-        const refPngResult = await screenshot(refOpened.page, fullPage, referenceClipSelector);
-        const refSnapshot: DesignSnapshot = await captureDesignSnapshot(refOpened.page);
-
-        targetPng = targetPngResult;
-        refPng = refPngResult;
-        styleDiff = diffDesignSnapshots(refSnapshot, targetSnapshot);
-        elementDiffs = diffElements(refSnapshot, targetSnapshot);
-      } finally {
-        await Promise.all([targetOpened.close(), refOpened.close()]);
-      }
-    } else {
-      const targetOpened = await openPage(browser, targetUrl, viewport, targetCaptureOptions);
-      try {
-        targetPng = await screenshot(targetOpened.page, fullPage, targetClipSelector);
-      } finally {
-        await targetOpened.close();
-      }
-      // shortcut: same reference image (uploaded or Figma-rendered) reused for every breakpoint
-      refPng = await sharp(referenceImageBuffer as Buffer)
-        .png()
-        .toBuffer();
-    }
-
-    const targetFile = `${bp}-target.png`;
-    const refFile = `${bp}-ref.png`;
-    const diffFile = `${bp}-diff.png`;
-
-    await fs.writeFile(path.join(runDir, targetFile), targetPng);
-    await fs.writeFile(path.join(runDir, refFile), refPng);
-
-    const normalized =
-      referenceType === 'url' ? await normalizeUrlPair(refPng, targetPng) : await normalizeImageAgainstTarget(refPng, targetPng);
-
-    const diffResult = await computeDiff(normalized.ref, normalized.target);
-    await fs.writeFile(path.join(runDir, diffFile), diffResult.diffPng);
-
-    return {
-      breakpoint: bp,
-      score: diffResult.score,
-      refImg: `/runs/${runId}/${refFile}`,
-      targetImg: `/runs/${runId}/${targetFile}`,
-      diffImg: `/runs/${runId}/${diffFile}`,
-      hotRegions: diffResult.hotRegions,
-      styleDiff,
-      elementDiffs,
-    };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { breakpoint: bp, error: message };
-  }
-}
-
-// --- Route ------------------------------------------------------------
+// --- Route: POST /api/compare ----------------------------------------------
+//
+// Engine Phase-1: both the legacy synchronous contract (stream absent/false)
+// and the new streaming contract (stream=true) run through the exact same
+// jobs.ts pipeline (createJob + runJob) — the only difference is whether the
+// request handler awaits completion before responding, or responds 202 and
+// lets the job run detached while the client subscribes over SSE. This is
+// what keeps the sync path byte-for-byte: it is not a separate code path.
 
 app.post('/api/compare', upload.single('image'), async (req, res) => {
   const parsed = compareBodySchema.safeParse(req.body);
@@ -280,8 +216,20 @@ app.post('/api/compare', upload.single('image'), async (req, res) => {
     res.status(400).json({ error: 'Invalid request', issues: parsed.error.issues });
     return;
   }
-  const { referenceType, referenceUrl, figmaUrl, targetUrl, breakpoints, fullPage, referenceCapture, targetCapture, advanced } =
-    parsed.data;
+  const {
+    referenceType,
+    referenceUrl,
+    figmaUrl,
+    targetUrl,
+    breakpoints,
+    fullPage,
+    referenceCapture,
+    targetCapture,
+    advanced,
+    stream,
+    stateManifest,
+    parityGate,
+  } = parsed.data;
 
   if (referenceType === 'image' && !req.file) {
     res.status(400).json({ error: 'image file is required when referenceType is "image"' });
@@ -320,52 +268,114 @@ app.post('/api/compare', upload.single('image'), async (req, res) => {
   const runDir = path.join(RUNS_DIR, runId);
   await fs.mkdir(runDir, { recursive: true });
 
-  let browser: Browser | undefined;
-  try {
-    browser = await launchBrowser();
-
-    const outcomes: BreakpointOutcome[] = [];
-    for (const bp of breakpoints) {
-      // sequential: keeps memory/CPU bounded and avoids overwhelming the target site
-      const outcome = await processBreakpoint({
-        browser,
-        bp,
-        runDir,
-        runId,
-        referenceType,
-        referenceUrl,
-        targetUrl,
-        fullPage,
-        referenceImageBuffer,
-        referenceCaptureOptions: effectiveReferenceCaptureOptions,
-        targetCaptureOptions: effectiveTargetCaptureOptions,
-      });
-      outcomes.push(outcome);
-    }
-
-    const scored = outcomes.filter((o): o is BreakpointResult => !isBreakpointError(o));
-    const avgScore = scored.length > 0 ? scored.reduce((sum, o) => sum + o.score, 0) / scored.length : 0;
-    const worst = scored.length > 0 ? scored.reduce((min, o) => (o.score < min.score ? o : min)) : null;
-
-    const responseWithoutPrompt: Omit<CompareResponse, 'claudePrompt'> = {
-      runId,
-      referenceType,
-      referenceUrl: referenceType === 'url' ? (referenceUrl as string) : referenceType === 'figma' ? (figmaUrl as string) : null,
-      targetUrl,
-      breakpoints: outcomes,
-      summary: { avgScore, worstBreakpoint: worst ? worst.breakpoint : null },
-    };
-
-    const claudePrompt = buildClaudePrompt(responseWithoutPrompt);
-    const response: CompareResponse = { ...responseWithoutPrompt, claudePrompt };
-
-    res.json(response);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: message });
-  } finally {
-    if (browser) await browser.close();
+  const job = createJob(runId, breakpoints);
+  if (referenceImageBuffer) {
+    setReferenceImageBuffer(job.jobId, referenceImageBuffer);
   }
+
+  const responseReferenceUrl = referenceType === 'url' ? referenceUrl : referenceType === 'figma' ? figmaUrl : undefined;
+
+  const runParams: RunJobParams = {
+    referenceType,
+    referenceUrl: responseReferenceUrl,
+    targetUrl,
+    breakpoints,
+    fullPage,
+    referenceCaptureOptions: effectiveReferenceCaptureOptions,
+    targetCaptureOptions: effectiveTargetCaptureOptions,
+    runDir,
+    runId,
+    parityGate,
+    stateManifest: stateManifest as StateManifest | undefined,
+  };
+
+  if (stream) {
+    res.status(202).json({ jobId: job.jobId, runId: job.runId });
+    // detached — errors are captured as terminal job events, never thrown here
+    void runJob(job, runParams);
+    return;
+  }
+
+  await runJob(job, runParams);
+  if (job.status === 'done' && job.response) {
+    const response: CompareResponse = job.response;
+    res.json(response);
+    return;
+  }
+  res.status(job.status === 'cancelled' ? 499 : 500).json({ error: job.error ?? `Job ended with status "${job.status}"` });
+});
+
+// --- Route: GET /api/jobs/:id/events (SSE) ---------------------------------
+
+app.get('/api/jobs/:id/events', (req, res) => {
+  const jobId = req.params.id;
+  const job = getJob(jobId);
+  if (!job) {
+    res.status(404).json({ error: 'job not found' });
+    return;
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  res.flushHeaders();
+
+  const send = (event: JobEvent): void => {
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+
+  const isTerminal = (event: JobEvent): boolean =>
+    event.type === 'job' && (event.status === 'done' || event.status === 'error' || event.status === 'cancelled');
+
+  const heartbeat = setInterval(() => {
+    res.write(':\n\n');
+  }, 15000);
+
+  const cleanup = (): void => {
+    clearInterval(heartbeat);
+    sub?.unsubscribe();
+  };
+
+  const sub = subscribeJob(jobId, (event) => {
+    send(event);
+    if (isTerminal(event)) {
+      cleanup();
+      res.end();
+    }
+  });
+
+  if (!sub) {
+    cleanup();
+    res.status(404).end();
+    return;
+  }
+
+  let alreadyTerminal = false;
+  for (const buffered of sub.replay) {
+    send(buffered);
+    if (isTerminal(buffered)) alreadyTerminal = true;
+  }
+  if (alreadyTerminal) {
+    cleanup();
+    res.end();
+    return;
+  }
+
+  req.on('close', cleanup);
+});
+
+// --- Route: POST /api/jobs/:id/cancel ---------------------------------------
+
+app.post('/api/jobs/:id/cancel', (req, res) => {
+  const jobId = req.params.id;
+  const ok = requestCancel(jobId);
+  if (!ok) {
+    res.status(404).json({ error: 'job not found' });
+    return;
+  }
+  res.status(202).json({ jobId, cancelRequested: true });
 });
 
 // --- Static frontend (prod) ---------------------------------------------

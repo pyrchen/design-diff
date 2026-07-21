@@ -7,7 +7,15 @@ export interface ViewportSize {
 }
 
 export async function launchBrowser(): Promise<Browser> {
-  return chromium.launch({ headless: true });
+  return chromium.launch({
+    headless: true,
+    // /dev/shm is capped (often 64MB) in Docker containers by default, which
+    // makes Chromium crash or stall on startup under memory pressure — hits
+    // hardest on resource-constrained hosts (e.g. Railway's free plan).
+    // --no-sandbox is required because container runtimes on most PaaS hosts
+    // don't grant the namespace permissions Chromium's sandbox needs.
+    args: ['--disable-dev-shm-usage', '--no-sandbox', '--disable-setuid-sandbox'],
+  });
 }
 
 export interface OpenedPage {

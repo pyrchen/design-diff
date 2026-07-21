@@ -30,6 +30,13 @@ const RUNS_DIR = path.join(ROOT_DIR, 'runs');
 const FIXTURES_DIR = path.join(ROOT_DIR, 'fixtures');
 const WEB_DIST_DIR = path.join(ROOT_DIR, 'web', 'dist');
 const PORT = Number(process.env.PORT ?? 3000);
+// Concurrent breakpoints each spin up their own Chromium pages (up to
+// concurrency * 2 for a URL-vs-URL run) — on memory-constrained hosts
+// (e.g. a 1GB Railway container) that's enough to OOM-crash pages on
+// real-world sites. Unset locally (falls back to jobs.ts's default of 2);
+// set CAPTURE_CONCURRENCY=1 on constrained deployments to trade speed for
+// headroom.
+const CAPTURE_CONCURRENCY = process.env.CAPTURE_CONCURRENCY ? Number(process.env.CAPTURE_CONCURRENCY) : undefined;
 
 const app = express();
 app.use(basicAuth);
@@ -325,6 +332,7 @@ app.post('/api/compare', upload.single('image'), async (req, res) => {
     runId,
     parityGate,
     stateManifest: stateManifest as StateManifest | undefined,
+    concurrency: CAPTURE_CONCURRENCY,
   };
 
   if (stream) {

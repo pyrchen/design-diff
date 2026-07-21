@@ -11,7 +11,8 @@ export type WaitUntilOption = 'load' | 'domcontentloaded' | 'networkidle';
 export interface CaptureCookie {
   name: string;
   value: string;
-  domain: string;
+  // Optional: when omitted, the server derives it from that side's own URL.
+  domain?: string;
   path?: string;
 }
 
@@ -21,7 +22,8 @@ export interface CaptureAuth {
   httpCredentials?: { username: string; password: string };
 }
 
-export interface AdvancedCaptureOptions {
+/** Per-side capture + auth options (Job 1: split from the old single "advanced" block). */
+export interface CaptureOptions {
   hideSelectors?: string[];
   dismissSelectors?: string[];
   waitUntil?: WaitUntilOption;
@@ -31,6 +33,9 @@ export interface AdvancedCaptureOptions {
   auth?: CaptureAuth;
   clipSelector?: string;
 }
+
+/** @deprecated legacy alias — kept only so old code/data referring to it still compiles. */
+export type AdvancedCaptureOptions = CaptureOptions;
 
 export interface HotRegion {
   col?: number;

@@ -1,5 +1,5 @@
 import { chromium, type Browser, type Page } from 'playwright';
-import type { AdvancedCaptureOptions, WaitUntilOption } from './types.js';
+import type { CaptureOptions, WaitUntilOption } from './types.js';
 
 export interface ViewportSize {
   width: number;
@@ -31,17 +31,30 @@ const FREEZE_ANIMATIONS_CSS = `
 const DEFAULT_WAIT_UNTIL: WaitUntilOption = 'networkidle';
 const DEFAULT_WAIT_MS = 500;
 
+/** Best-effort hostname extraction for deriving a cookie's domain from the side's own URL. */
+function hostnameOf(url: string): string | undefined {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Opens a fresh, isolated browser context+page against a URL at the given
- * viewport, applies the Feature-1 robustness options (auth, wait controls,
- * animation freezing, dismiss/hide selectors), and waits for the page to
- * settle. Caller must invoke close().
+ * viewport, applies the Job-1 per-side robustness options (auth, wait
+ * controls, animation freezing, dismiss/hide selectors), and waits for the
+ * page to settle. Caller must invoke close().
+ *
+ * `options` is scoped to THIS side only (reference or target) — auth
+ * (cookies/headers/httpCredentials) is applied exclusively to this
+ * browser context and never leaks to the other side's context.
  */
 export async function openPage(
   browser: Browser,
   url: string,
   viewport: ViewportSize,
-  options: AdvancedCaptureOptions = {},
+  options: CaptureOptions = {},
 ): Promise<OpenedPage> {
   const { hideSelectors, dismissSelectors, waitUntil, waitMs, waitForSelector, freezeAnimations = true, auth } = options;
 
@@ -56,7 +69,9 @@ export async function openPage(
       auth.cookies.map((c) => ({
         name: c.name,
         value: c.value,
-        domain: c.domain,
+        // domain omitted by the user -> derive it from this side's own URL
+        // (never from the other side's URL, so per-side auth stays isolated).
+        domain: c.domain && c.domain.trim() ? c.domain : hostnameOf(url),
         path: c.path ?? '/',
       })),
     );

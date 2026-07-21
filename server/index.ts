@@ -16,9 +16,9 @@ import { captureDesignSnapshot, diffDesignSnapshots, diffElements } from './styl
 import { buildClaudePrompt } from './prompt.js';
 import { fetchFigmaReferenceImage, FigmaConfigError, FigmaApiError } from './figma.js';
 import type {
-  AdvancedCaptureOptions,
   BreakpointOutcome,
   BreakpointResult,
+  CaptureOptions,
   CompareResponse,
   DesignSnapshot,
   ElementDiffEntry,
@@ -63,7 +63,11 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 
 
 const WAIT_UNTIL_VALUES = ['load', 'domcontentloaded', 'networkidle'] as const;
 
-const advancedOptionsSchema = z.object({
+// Job 1: per-side capture + auth options. Cookie `domain` is optional here —
+// when omitted the server derives it from that side's own URL (see
+// capture.ts hostnameOf), so a cookie block never has to know or guess the
+// other side's host.
+const captureOptionsSchema = z.object({
   hideSelectors: z.array(z.string().min(1)).optional(),
   dismissSelectors: z.array(z.string().min(1)).optional(),
   waitUntil: z.enum(WAIT_UNTIL_VALUES).optional(),
@@ -77,7 +81,7 @@ const advancedOptionsSchema = z.object({
           z.object({
             name: z.string().min(1),
             value: z.string(),
-            domain: z.string().min(1),
+            domain: z.string().min(1).optional(),
             path: z.string().optional(),
           }),
         )
@@ -88,6 +92,26 @@ const advancedOptionsSchema = z.object({
     .optional(),
   clipSelector: z.string().min(1).optional(),
 });
+
+/** Builds a fresh `z.string().optional().transform(...)` field that JSON-parses + validates against captureOptionsSchema. */
+function captureOptionsField(fieldName: string) {
+  return z
+    .string()
+    .optional()
+    .transform((s, ctx) => {
+      if (!s || s.trim() === '') return undefined;
+      try {
+        const parsed = JSON.parse(s);
+        return captureOptionsSchema.parse(parsed);
+      } catch (err) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `${fieldName} must be a JSON object matching CaptureOptions: ${err instanceof Error ? err.message : String(err)}`,
+        });
+        return z.NEVER;
+      }
+    });
+}
 
 const compareBodySchema = z
   .object({
@@ -111,22 +135,13 @@ const compareBodySchema = z
       .string()
       .optional()
       .transform((s) => s === 'true'),
-    advanced: z
-      .string()
-      .optional()
-      .transform((s, ctx) => {
-        if (!s || s.trim() === '') return undefined;
-        try {
-          const parsed = JSON.parse(s);
-          return advancedOptionsSchema.parse(parsed);
-        } catch (err) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `advanced must be a JSON object matching AdvancedCaptureOptions: ${err instanceof Error ? err.message : String(err)}`,
-          });
-          return z.NEVER;
-        }
-      }),
+    // Job 1: per-side capture + auth. referenceCapture only ever applies when
+    // referenceType === 'url' (checked below); targetCapture always applies.
+    // `advanced` is the pre-split legacy field, kept for back-compat: when a
+    // per-side field is absent, its value is applied to that side instead.
+    referenceCapture: captureOptionsField('referenceCapture'),
+    targetCapture: captureOptionsField('targetCapture'),
+    advanced: captureOptionsField('advanced'),
   })
   .refine((data) => data.referenceType !== 'url' || !!data.referenceUrl, {
     message: 'referenceUrl is required when referenceType is "url"',
@@ -167,13 +182,29 @@ interface BreakpointContext {
   targetUrl: string;
   fullPage: boolean;
   referenceImageBuffer: Buffer | undefined;
-  advanced: AdvancedCaptureOptions | undefined;
+  // Job 1: each side carries its own capture+auth options, applied to ITS
+  // OWN Playwright context only — see openPage() in capture.ts.
+  referenceCaptureOptions: CaptureOptions | undefined;
+  targetCaptureOptions: CaptureOptions | undefined;
 }
 
 async function processBreakpoint(ctx: BreakpointContext): Promise<BreakpointOutcome> {
-  const { browser, bp, runDir, runId, referenceType, referenceUrl, targetUrl, fullPage, referenceImageBuffer, advanced } = ctx;
+  const {
+    browser,
+    bp,
+    runDir,
+    runId,
+    referenceType,
+    referenceUrl,
+    targetUrl,
+    fullPage,
+    referenceImageBuffer,
+    referenceCaptureOptions,
+    targetCaptureOptions,
+  } = ctx;
   const viewport = { width: bp, height: 900 };
-  const clipSelector = advanced?.clipSelector;
+  const targetClipSelector = targetCaptureOptions?.clipSelector;
+  const referenceClipSelector = referenceCaptureOptions?.clipSelector;
 
   try {
     let targetPng: Buffer;
@@ -183,13 +214,13 @@ async function processBreakpoint(ctx: BreakpointContext): Promise<BreakpointOutc
 
     if (referenceType === 'url') {
       const [targetOpened, refOpened] = await Promise.all([
-        openPage(browser, targetUrl, viewport, advanced),
-        openPage(browser, referenceUrl as string, viewport, advanced),
+        openPage(browser, targetUrl, viewport, targetCaptureOptions),
+        openPage(browser, referenceUrl as string, viewport, referenceCaptureOptions),
       ]);
       try {
-        const targetPngResult = await screenshot(targetOpened.page, fullPage, clipSelector);
+        const targetPngResult = await screenshot(targetOpened.page, fullPage, targetClipSelector);
         const targetSnapshot: DesignSnapshot = await captureDesignSnapshot(targetOpened.page);
-        const refPngResult = await screenshot(refOpened.page, fullPage, clipSelector);
+        const refPngResult = await screenshot(refOpened.page, fullPage, referenceClipSelector);
         const refSnapshot: DesignSnapshot = await captureDesignSnapshot(refOpened.page);
 
         targetPng = targetPngResult;
@@ -200,9 +231,9 @@ async function processBreakpoint(ctx: BreakpointContext): Promise<BreakpointOutc
         await Promise.all([targetOpened.close(), refOpened.close()]);
       }
     } else {
-      const targetOpened = await openPage(browser, targetUrl, viewport, advanced);
+      const targetOpened = await openPage(browser, targetUrl, viewport, targetCaptureOptions);
       try {
-        targetPng = await screenshot(targetOpened.page, fullPage, clipSelector);
+        targetPng = await screenshot(targetOpened.page, fullPage, targetClipSelector);
       } finally {
         await targetOpened.close();
       }
@@ -249,12 +280,21 @@ app.post('/api/compare', upload.single('image'), async (req, res) => {
     res.status(400).json({ error: 'Invalid request', issues: parsed.error.issues });
     return;
   }
-  const { referenceType, referenceUrl, figmaUrl, targetUrl, breakpoints, fullPage, advanced } = parsed.data;
+  const { referenceType, referenceUrl, figmaUrl, targetUrl, breakpoints, fullPage, referenceCapture, targetCapture, advanced } =
+    parsed.data;
 
   if (referenceType === 'image' && !req.file) {
     res.status(400).json({ error: 'image file is required when referenceType is "image"' });
     return;
   }
+
+  // Job 1: resolve effective per-side options. A per-side field always wins;
+  // the legacy `advanced` block (pre-split, applied to both sides) is only a
+  // fallback for whichever side didn't send its own field. referenceCapture
+  // only makes sense when the reference itself is a live URL.
+  const effectiveReferenceCaptureOptions: CaptureOptions | undefined =
+    referenceType === 'url' ? (referenceCapture ?? advanced) : undefined;
+  const effectiveTargetCaptureOptions: CaptureOptions | undefined = targetCapture ?? advanced;
 
   // Resolve the static reference image up front (once per request, not per
   // breakpoint) so a bad Figma URL / missing token fails fast with a clean
@@ -297,7 +337,8 @@ app.post('/api/compare', upload.single('image'), async (req, res) => {
         targetUrl,
         fullPage,
         referenceImageBuffer,
-        advanced,
+        referenceCaptureOptions: effectiveReferenceCaptureOptions,
+        targetCaptureOptions: effectiveTargetCaptureOptions,
       });
       outcomes.push(outcome);
     }

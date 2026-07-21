@@ -1,4 +1,4 @@
-import type { AdvancedCaptureOptions, CompareResponse, ReferenceType } from './types';
+import type { CaptureOptions, CompareResponse, ReferenceType } from './types';
 
 export interface CompareParams {
   referenceType: ReferenceType;
@@ -8,12 +8,15 @@ export interface CompareParams {
   breakpoints: number[];
   fullPage: boolean;
   image?: File | null;
-  advanced?: AdvancedCaptureOptions;
+  /** Applied only when referenceType === 'url'. */
+  referenceCapture?: CaptureOptions;
+  /** Always applied to the target capture. */
+  targetCapture?: CaptureOptions;
 }
 
-/** Strips empty arrays/objects/strings so we don't send a noisy "advanced" blob for defaults. */
-function pruneAdvanced(a: AdvancedCaptureOptions): AdvancedCaptureOptions | undefined {
-  const out: AdvancedCaptureOptions = {};
+/** Strips empty arrays/objects/strings so we don't send a noisy capture-options blob for defaults. */
+function pruneCaptureOptions(a: CaptureOptions): CaptureOptions | undefined {
+  const out: CaptureOptions = {};
   if (a.hideSelectors && a.hideSelectors.length > 0) out.hideSelectors = a.hideSelectors;
   if (a.dismissSelectors && a.dismissSelectors.length > 0) out.dismissSelectors = a.dismissSelectors;
   if (a.waitUntil) out.waitUntil = a.waitUntil;
@@ -36,8 +39,12 @@ export async function compare(params: CompareParams): Promise<CompareResponse> {
   formData.set('breakpoints', JSON.stringify(params.breakpoints));
   formData.set('fullPage', String(params.fullPage));
   if (params.image) formData.set('image', params.image);
-  const advanced = params.advanced ? pruneAdvanced(params.advanced) : undefined;
-  if (advanced) formData.set('advanced', JSON.stringify(advanced));
+
+  const referenceCapture = params.referenceCapture ? pruneCaptureOptions(params.referenceCapture) : undefined;
+  if (referenceCapture && params.referenceType === 'url') formData.set('referenceCapture', JSON.stringify(referenceCapture));
+
+  const targetCapture = params.targetCapture ? pruneCaptureOptions(params.targetCapture) : undefined;
+  if (targetCapture) formData.set('targetCapture', JSON.stringify(targetCapture));
 
   const res = await fetch('/api/compare', {
     method: 'POST',

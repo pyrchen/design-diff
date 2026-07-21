@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { Figma, Image as ImageIcon, Layers, Link2, Monitor, Plus, Target as TargetIcon, TriangleAlert, Upload } from 'lucide-vue-next';
 import type { CompareParams } from '../api';
-import type { AdvancedCaptureOptions, CaptureAuth, WaitUntilOption } from '../types';
+import { buildCaptureOptions, cloneCaptureFormState, createCaptureFormState, type CaptureFormState } from '../composables/captureForm';
+import CaptureAuthPanel from './CaptureAuthPanel.vue';
 
 defineProps<{ loading: boolean }>();
 const emit = defineEmits<{ submit: [params: CompareParams] }>();
@@ -22,17 +24,18 @@ const customWidthInput = ref('');
 
 const errorMessage = ref('');
 
-// --- Feature 1: advanced capture options -----------------------------------
-const advancedOpen = ref(false);
-const hideSelectorsText = ref('');
-const dismissSelectorsText = ref('');
-const waitUntil = ref<WaitUntilOption>('networkidle');
-const waitMs = ref(500);
-const waitForSelector = ref('');
-const freezeAnimations = ref(true);
-const clipSelector = ref('');
-const authJson = ref('');
-const authError = ref('');
+// Job 1: independent per-side capture + auth state.
+const referenceCapture = ref<CaptureFormState>(createCaptureFormState());
+const targetCapture = ref<CaptureFormState>(createCaptureFormState());
+
+function copyReferenceToTarget() {
+  targetCapture.value = cloneCaptureFormState(referenceCapture.value);
+  targetCapture.value.open = true;
+}
+function copyTargetToReference() {
+  referenceCapture.value = cloneCaptureFormState(targetCapture.value);
+  referenceCapture.value.open = true;
+}
 
 function togglePreset(bp: number) {
   activePresets.value[bp] = !activePresets.value[bp];
@@ -67,38 +70,6 @@ const selectedBreakpoints = computed(() =>
   [...presets.filter((p) => activePresets.value[p]), ...customWidths.value].sort((a, b) => b - a),
 );
 
-function parseSelectorList(text: string): string[] {
-  return text
-    .split(/[\n,]/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-}
-
-function buildAdvancedOptions(): AdvancedCaptureOptions | undefined {
-  authError.value = '';
-  let auth: CaptureAuth | undefined;
-  if (authJson.value.trim()) {
-    try {
-      auth = JSON.parse(authJson.value) as CaptureAuth;
-    } catch {
-      authError.value = 'Auth JSON некорректен — проверьте синтаксис.';
-      return undefined;
-    }
-  }
-
-  const advanced: AdvancedCaptureOptions = {
-    hideSelectors: parseSelectorList(hideSelectorsText.value),
-    dismissSelectors: parseSelectorList(dismissSelectorsText.value),
-    waitUntil: waitUntil.value,
-    waitMs: waitMs.value,
-    waitForSelector: waitForSelector.value.trim() || undefined,
-    freezeAnimations: freezeAnimations.value,
-    clipSelector: clipSelector.value.trim() || undefined,
-    auth,
-  };
-  return advanced;
-}
-
 function handleSubmit() {
   errorMessage.value = '';
   if (selectedBreakpoints.value.length === 0) {
@@ -122,12 +93,6 @@ function handleSubmit() {
     return;
   }
 
-  const advanced = buildAdvancedOptions();
-  if (authError.value) {
-    errorMessage.value = authError.value;
-    return;
-  }
-
   emit('submit', {
     referenceType: sourceType.value,
     referenceUrl: sourceType.value === 'url' ? referenceUrl.value.trim() : undefined,
@@ -136,265 +101,220 @@ function handleSubmit() {
     breakpoints: selectedBreakpoints.value,
     fullPage: fullPage.value,
     image: sourceType.value === 'image' ? imageFile.value : null,
-    advanced,
+    referenceCapture: sourceType.value === 'url' ? buildCaptureOptions(referenceCapture.value) : undefined,
+    targetCapture: buildCaptureOptions(targetCapture.value),
   });
 }
+
+defineExpose({ submit: handleSubmit });
+
+const inputClass =
+  'w-full rounded-md border border-border-hairline bg-surface px-3 py-2 text-sm text-fg outline-none transition-colors duration-fast ease-standard focus:border-accent';
+const panelClass = 'rounded-lg border border-border-hairline bg-surface/60 p-4 shadow-soft-md';
 </script>
 
 <template>
-  <form class="rounded-xl border border-base-700 bg-base-900 p-6" @submit.prevent="handleSubmit">
-    <div class="mb-5 flex flex-wrap gap-2">
-      <button
-        type="button"
-        class="rounded-md px-4 py-2 text-sm font-medium transition"
-        :class="sourceType === 'url' ? 'bg-indigo-500 text-white' : 'bg-base-800 text-slate-300 hover:bg-base-700'"
-        @click="sourceType = 'url'"
-      >
-        Референс — URL
-      </button>
-      <button
-        type="button"
-        class="rounded-md px-4 py-2 text-sm font-medium transition"
-        :class="sourceType === 'image' ? 'bg-indigo-500 text-white' : 'bg-base-800 text-slate-300 hover:bg-base-700'"
-        @click="sourceType = 'image'"
-      >
-        Референс — изображение
-      </button>
-      <button
-        type="button"
-        class="rounded-md px-4 py-2 text-sm font-medium transition"
-        :class="sourceType === 'figma' ? 'bg-indigo-500 text-white' : 'bg-base-800 text-slate-300 hover:bg-base-700'"
-        @click="sourceType = 'figma'"
-      >
-        Референс — Figma
-      </button>
-    </div>
+  <form @submit.prevent="handleSubmit">
+    <!-- Two symmetric peer panels: Reference and Target — the core comparison. -->
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <section :class="panelClass">
+        <h2 class="mb-3 flex items-center gap-2 text-sm font-semibold text-fg">
+          <Layers :size="15" class="text-fg-faint" aria-hidden="true" />
+          Референс
+        </h2>
 
-    <div v-if="sourceType === 'url'" class="mb-4">
-      <label class="mb-1 block text-sm text-slate-400">URL референса</label>
-      <input
-        v-model="referenceUrl"
-        type="text"
-        placeholder="https://example.com"
-        class="w-full rounded-lg border border-base-700 bg-base-950 px-3 py-2 text-sm outline-none focus:border-indigo-500"
-      />
-    </div>
-    <div v-else-if="sourceType === 'image'" class="mb-4">
-      <label class="mb-1 block text-sm text-slate-400">Изображение референса (макет)</label>
-      <div
-        class="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed px-4 py-8 text-center text-sm transition"
-        :class="isDragging ? 'border-indigo-500 bg-indigo-500/10' : 'border-base-700 bg-base-950 text-slate-400'"
-        @dragover.prevent="isDragging = true"
-        @dragleave.prevent="isDragging = false"
-        @drop.prevent="onDrop"
-        @click="fileInputEl?.click()"
-      >
-        <template v-if="imageFile">
-          <p class="text-slate-200">{{ imageFile.name }}</p>
-          <p class="mt-1 text-xs text-slate-500">Нажмите или перетащите, чтобы заменить</p>
-        </template>
-        <template v-else>
-          <p>Перетащите изображение сюда или нажмите, чтобы выбрать файл</p>
-          <p class="mt-1 text-xs text-slate-500">PNG или JPG</p>
-        </template>
-        <input ref="fileInputEl" type="file" accept="image/png,image/jpeg" class="hidden" @change="onFileChange" />
-      </div>
-    </div>
-    <div v-else class="mb-4">
-      <label class="mb-1 block text-sm text-slate-400">Ссылка на Figma (frame)</label>
-      <input
-        v-model="figmaUrl"
-        type="text"
-        placeholder="https://www.figma.com/design/&lt;fileKey&gt;/Name?node-id=1-2"
-        class="w-full rounded-lg border border-base-700 bg-base-950 px-3 py-2 text-sm outline-none focus:border-indigo-500"
-      />
-      <p class="mt-1 text-xs text-slate-500">
-        В идеале ссылка должна содержать <code>?node-id=...</code> (в Figma: выделите фрейм → «Copy link to selection»).
-        Токен доступа читается из локального файла <code>.env</code> (переменная <code>FIGMA_TOKEN</code>) — см. README.
-      </p>
-    </div>
+        <div class="mb-3 grid grid-cols-3 gap-1.5">
+          <button
+            type="button"
+            class="flex items-center justify-center gap-1.5 rounded-md border px-2 py-2 text-xs font-medium transition-colors duration-fast ease-standard"
+            :class="
+              sourceType === 'url'
+                ? 'border-accent-border bg-accent-soft text-accent'
+                : 'border-border-hairline bg-transparent text-fg-subtle hover:border-border hover:text-fg-muted'
+            "
+            @click="sourceType = 'url'"
+          >
+            <Link2 :size="13" aria-hidden="true" />
+            URL
+          </button>
+          <button
+            type="button"
+            class="flex items-center justify-center gap-1.5 rounded-md border px-2 py-2 text-xs font-medium transition-colors duration-fast ease-standard"
+            :class="
+              sourceType === 'image'
+                ? 'border-accent-border bg-accent-soft text-accent'
+                : 'border-border-hairline bg-transparent text-fg-subtle hover:border-border hover:text-fg-muted'
+            "
+            @click="sourceType = 'image'"
+          >
+            <ImageIcon :size="13" aria-hidden="true" />
+            Изображение
+          </button>
+          <button
+            type="button"
+            class="flex items-center justify-center gap-1.5 rounded-md border px-2 py-2 text-xs font-medium transition-colors duration-fast ease-standard"
+            :class="
+              sourceType === 'figma'
+                ? 'border-accent-border bg-accent-soft text-accent'
+                : 'border-border-hairline bg-transparent text-fg-subtle hover:border-border hover:text-fg-muted'
+            "
+            @click="sourceType = 'figma'"
+          >
+            <Figma :size="13" aria-hidden="true" />
+            Figma
+          </button>
+        </div>
 
-    <div class="mb-4">
-      <label class="mb-1 block text-sm text-slate-400">URL целевого сайта</label>
-      <input
-        v-model="targetUrl"
-        type="text"
-        placeholder="https://example.com"
-        class="w-full rounded-lg border border-base-700 bg-base-950 px-3 py-2 text-sm outline-none focus:border-indigo-500"
-      />
-    </div>
+        <div v-if="sourceType === 'url'" class="mb-3">
+          <input v-model="referenceUrl" type="text" placeholder="https://example.com" :class="inputClass" />
+        </div>
+        <div v-else-if="sourceType === 'image'" class="mb-3">
+          <div
+            class="flex flex-col items-center justify-center rounded-md border-2 border-dashed px-4 py-7 text-center text-sm transition-colors duration-base ease-standard"
+            :class="isDragging ? 'border-accent bg-accent-soft' : 'border-border-hairline bg-bg/40 text-fg-subtle'"
+            @dragover.prevent="isDragging = true"
+            @dragleave.prevent="isDragging = false"
+            @drop.prevent="onDrop"
+            @click="fileInputEl?.click()"
+          >
+            <Upload :size="18" class="mb-1.5 text-fg-faint" aria-hidden="true" />
+            <template v-if="imageFile">
+              <p class="text-fg">{{ imageFile.name }}</p>
+              <p class="mt-1 text-xs text-fg-faint">Нажмите или перетащите, чтобы заменить</p>
+            </template>
+            <template v-else>
+              <p>Перетащите изображение сюда или нажмите, чтобы выбрать файл</p>
+              <p class="mt-1 text-xs text-fg-faint">PNG или JPG</p>
+            </template>
+            <input ref="fileInputEl" type="file" accept="image/png,image/jpeg" class="hidden" @change="onFileChange" />
+          </div>
+        </div>
+        <div v-else class="mb-3">
+          <input
+            v-model="figmaUrl"
+            type="text"
+            placeholder="https://www.figma.com/design/&lt;fileKey&gt;/Name?node-id=1-2"
+            :class="inputClass"
+          />
+          <p class="mt-1.5 text-xs text-fg-faint">
+            В идеале ссылка должна содержать <code>?node-id=...</code>. Токен читается из локального <code>.env</code>
+            (<code>FIGMA_TOKEN</code>).
+          </p>
+        </div>
 
-    <div class="mb-4">
-      <label class="mb-2 block text-sm text-slate-400">Брейкпоинты</label>
-      <div class="flex flex-wrap gap-2">
-        <button
-          v-for="p in presets"
-          :key="p"
-          type="button"
-          class="rounded-full border px-3 py-1.5 text-sm transition"
-          :class="
-            activePresets[p]
-              ? 'border-indigo-500 bg-indigo-500/15 text-indigo-300'
-              : 'border-base-700 bg-base-950 text-slate-400 hover:border-base-600'
-          "
-          @click="togglePreset(p)"
-        >
-          {{ p }}px
-        </button>
-        <button
-          v-for="w in customWidths"
-          :key="'custom-' + w"
-          type="button"
-          class="rounded-full border border-indigo-500 bg-indigo-500/15 px-3 py-1.5 text-sm text-indigo-300"
-          @click="removeCustomWidth(w)"
-        >
-          {{ w }}px ×
-        </button>
-      </div>
-      <div class="mt-2 flex gap-2">
-        <input
-          v-model="customWidthInput"
-          type="number"
-          min="200"
-          max="4000"
-          placeholder="своя ширина, px"
-          class="w-40 rounded-lg border border-base-700 bg-base-950 px-3 py-1.5 text-sm outline-none focus:border-indigo-500"
-          @keydown.enter.prevent="addCustomWidth"
+        <CaptureAuthPanel
+          v-if="sourceType === 'url'"
+          v-model="referenceCapture"
+          label="референса"
+          @copy-to-other="copyReferenceToTarget"
         />
-        <button type="button" class="rounded-lg bg-base-800 px-3 py-1.5 text-sm hover:bg-base-700" @click="addCustomWidth">
-          Добавить
-        </button>
-      </div>
-    </div>
+      </section>
 
-    <div class="mb-5 flex items-center gap-3">
-      <button
-        type="button"
-        role="switch"
-        :aria-checked="fullPage"
-        class="relative h-6 w-11 rounded-full transition"
-        :class="fullPage ? 'bg-indigo-500' : 'bg-base-700'"
-        @click="fullPage = !fullPage"
-      >
-        <span class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition" :class="fullPage ? 'left-5' : 'left-0.5'" />
-      </button>
-      <span class="text-sm text-slate-300">Полная страница (fullPage)</span>
-    </div>
+      <section :class="panelClass">
+        <h2 class="mb-3 flex items-center gap-2 text-sm font-semibold text-fg">
+          <TargetIcon :size="15" class="text-fg-faint" aria-hidden="true" />
+          Целевой сайт
+        </h2>
 
-    <div class="mb-5 rounded-lg border border-base-700">
-      <button
-        type="button"
-        class="flex w-full items-center justify-between px-4 py-3 text-sm font-medium text-slate-300"
-        @click="advancedOpen = !advancedOpen"
-      >
-        <span>Расширенные настройки</span>
-        <span class="text-slate-500">{{ advancedOpen ? '▲' : '▼' }}</span>
-      </button>
-
-      <div v-if="advancedOpen" class="space-y-4 border-t border-base-700 px-4 py-4">
-        <div>
-          <label class="mb-1 block text-sm text-slate-400">Скрыть элементы перед снимком (селекторы, через запятую/строку)</label>
-          <textarea
-            v-model="hideSelectorsText"
-            rows="2"
-            placeholder="#cookie-banner, .chat-widget"
-            class="w-full rounded-lg border border-base-700 bg-base-950 px-3 py-2 text-sm outline-none focus:border-indigo-500"
-          />
-        </div>
-        <div>
-          <label class="mb-1 block text-sm text-slate-400">Кликнуть перед снимком, если есть (например «Принять cookies»)</label>
-          <textarea
-            v-model="dismissSelectorsText"
-            rows="2"
-            placeholder="#accept-cookies, .modal-close"
-            class="w-full rounded-lg border border-base-700 bg-base-950 px-3 py-2 text-sm outline-none focus:border-indigo-500"
-          />
+        <!-- spacer to keep the source-type row height symmetric with the Reference panel -->
+        <div class="mb-3 hidden grid-cols-3 gap-1.5 lg:grid" aria-hidden="true">
+          <div class="rounded-md border border-transparent px-2 py-2 text-xs opacity-0">—</div>
         </div>
 
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <div>
-            <label class="mb-1 block text-sm text-slate-400">Ожидание загрузки</label>
-            <select
-              v-model="waitUntil"
-              class="w-full rounded-lg border border-base-700 bg-base-950 px-3 py-2 text-sm outline-none focus:border-indigo-500"
+        <div class="mb-3">
+          <input v-model="targetUrl" type="text" placeholder="https://example.com" :class="inputClass" />
+        </div>
+
+        <CaptureAuthPanel v-model="targetCapture" label="целевого сайта" @copy-to-other="copyTargetToReference" />
+      </section>
+    </div>
+
+    <!-- Breakpoints + capture mode, shared across both sides. -->
+    <div :class="[panelClass, 'mt-4']">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <label class="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-fg-faint">
+            <Monitor :size="13" aria-hidden="true" />
+            Брейкпоинты
+          </label>
+          <div class="flex flex-wrap gap-1.5">
+            <button
+              v-for="p in presets"
+              :key="p"
+              type="button"
+              class="rounded-full border px-3 py-1.5 font-mono text-sm transition-colors duration-fast ease-standard"
+              :class="
+                activePresets[p]
+                  ? 'border-accent-border bg-accent-soft text-accent'
+                  : 'border-border-hairline bg-transparent text-fg-subtle hover:border-border hover:text-fg-muted'
+              "
+              @click="togglePreset(p)"
             >
-              <option value="networkidle">networkidle</option>
-              <option value="load">load</option>
-              <option value="domcontentloaded">domcontentloaded</option>
-            </select>
+              {{ p }}px
+            </button>
+            <button
+              v-for="w in customWidths"
+              :key="'custom-' + w"
+              type="button"
+              class="rounded-full border border-accent-border bg-accent-soft px-3 py-1.5 font-mono text-sm text-accent"
+              @click="removeCustomWidth(w)"
+            >
+              {{ w }}px ×
+            </button>
           </div>
-          <div>
-            <label class="mb-1 block text-sm text-slate-400">Доп. пауза, мс</label>
+          <div class="mt-2 flex gap-2">
             <input
-              v-model.number="waitMs"
+              v-model="customWidthInput"
               type="number"
-              min="0"
-              max="60000"
-              class="w-full rounded-lg border border-base-700 bg-base-950 px-3 py-2 text-sm outline-none focus:border-indigo-500"
+              min="200"
+              max="4000"
+              placeholder="своя ширина, px"
+              class="w-36 rounded-md border border-border-hairline bg-surface px-3 py-1.5 font-mono text-sm text-fg outline-none transition-colors duration-fast ease-standard focus:border-accent"
+              @keydown.enter.prevent="addCustomWidth"
             />
-          </div>
-          <div>
-            <label class="mb-1 block text-sm text-slate-400">Ждать селектор (опц.)</label>
-            <input
-              v-model="waitForSelector"
-              type="text"
-              placeholder=".hero-loaded"
-              class="w-full rounded-lg border border-base-700 bg-base-950 px-3 py-2 text-sm outline-none focus:border-indigo-500"
-            />
+            <button
+              type="button"
+              class="inline-flex items-center gap-1 rounded-md border border-border-hairline px-3 py-1.5 text-sm text-fg-subtle transition-colors duration-fast ease-standard hover:border-border hover:text-fg-muted"
+              @click="addCustomWidth"
+            >
+              <Plus :size="14" aria-hidden="true" />
+              Добавить
+            </button>
           </div>
         </div>
 
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-2.5">
           <button
             type="button"
             role="switch"
-            :aria-checked="freezeAnimations"
-            class="relative h-6 w-11 rounded-full transition"
-            :class="freezeAnimations ? 'bg-indigo-500' : 'bg-base-700'"
-            @click="freezeAnimations = !freezeAnimations"
+            :aria-checked="fullPage"
+            class="relative h-6 w-11 rounded-full transition-colors duration-base ease-standard"
+            :class="fullPage ? 'bg-accent' : 'bg-elevated'"
+            @click="fullPage = !fullPage"
           >
             <span
-              class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition"
-              :class="freezeAnimations ? 'left-5' : 'left-0.5'"
+              class="absolute top-0.5 h-5 w-5 rounded-full bg-fg transition-all duration-base ease-standard"
+              :class="fullPage ? 'left-5' : 'left-0.5'"
             />
           </button>
-          <span class="text-sm text-slate-300">Замораживать анимации/переходы перед снимком</span>
-        </div>
-
-        <div>
-          <label class="mb-1 block text-sm text-slate-400">Снимать только один блок (CSS-селектор, опц.)</label>
-          <input
-            v-model="clipSelector"
-            type="text"
-            placeholder=".hero, #pricing-table"
-            class="w-full rounded-lg border border-base-700 bg-base-950 px-3 py-2 text-sm outline-none focus:border-indigo-500"
-          />
-        </div>
-
-        <div>
-          <label class="mb-1 block text-sm text-slate-400">
-            Авторизация (опц.) — JSON: <code>cookies</code>, <code>headers</code>, <code>httpCredentials</code>
-          </label>
-          <textarea
-            v-model="authJson"
-            rows="3"
-            placeholder='{"headers": {"Authorization": "Bearer ..."}}'
-            class="w-full rounded-lg border border-base-700 bg-base-950 px-3 py-2 font-mono text-xs outline-none focus:border-indigo-500"
-          />
-          <p class="mt-1 text-xs text-slate-500">
-            Применяется одинаково и к референсу-URL, и к целевому сайту. Ничего не отправляется никуда, кроме указанных URL —
-            значения остаются локально.
-          </p>
+          <span class="text-sm text-fg-muted">Полная страница (fullPage)</span>
         </div>
       </div>
     </div>
 
-    <p v-if="errorMessage" class="mb-3 text-sm text-rose-400">{{ errorMessage }}</p>
+    <p
+      v-if="errorMessage"
+      class="mt-3 flex items-center gap-2 rounded-md border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger"
+    >
+      <TriangleAlert :size="15" class="shrink-0" aria-hidden="true" />
+      {{ errorMessage }}
+    </p>
 
+    <!-- Submit is reachable here too (not only via the sticky top-bar CTA). -->
     <button
       type="submit"
       :disabled="loading"
-      class="w-full rounded-lg bg-indigo-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
+      class="mt-4 w-full rounded-md bg-accent px-4 py-2.5 text-sm font-semibold text-accent-on shadow-soft-md transition-all duration-base ease-standard hover:bg-accent-hover hover:shadow-soft-lg disabled:cursor-not-allowed disabled:opacity-60 disabled:shadow-none lg:hidden"
     >
       {{ loading ? 'Сравниваю…' : 'Сравнить' }}
     </button>

@@ -9,7 +9,11 @@ export type WaitUntilOption = 'load' | 'domcontentloaded' | 'networkidle';
 export interface CaptureCookie {
   name: string;
   value: string;
-  domain: string;
+  // Optional: when omitted, the server derives it from that side's own URL
+  // (reference cookies from referenceUrl's host, target cookies from
+  // targetUrl's host) so a per-side cookie never leaks its domain guess
+  // onto the other side.
+  domain?: string;
   path?: string;
 }
 
@@ -19,7 +23,8 @@ export interface CaptureAuth {
   httpCredentials?: { username: string; password: string };
 }
 
-export interface AdvancedCaptureOptions {
+/** Per-side capture + auth options (Job 1: split from the old single "advanced" block). */
+export interface CaptureOptions {
   hideSelectors?: string[];
   dismissSelectors?: string[];
   waitUntil?: WaitUntilOption;
@@ -30,12 +35,20 @@ export interface AdvancedCaptureOptions {
   clipSelector?: string;
 }
 
+/** @deprecated legacy alias — the pre-split single "advanced" block had this exact shape. */
+export type AdvancedCaptureOptions = CaptureOptions;
+
 export interface CompareRequest {
   referenceType: ReferenceType;
   referenceUrl?: string;
   targetUrl: string;
   breakpoints: number[];
   fullPage: boolean;
+  /** Applied only when referenceType === 'url'. Falls back to `advanced` when absent (back-compat). */
+  referenceCapture?: CaptureOptions;
+  /** Always applied to the target capture. Falls back to `advanced` when absent (back-compat). */
+  targetCapture?: CaptureOptions;
+  /** @deprecated legacy single-block capture options applied to BOTH sides when the per-side fields above are absent. */
   advanced?: AdvancedCaptureOptions;
   figmaUrl?: string;
 }

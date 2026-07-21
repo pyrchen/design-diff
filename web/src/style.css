@@ -1,3 +1,5 @@
+@import './design-tokens.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -9,7 +11,19 @@ body,
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: 'Fira Sans', system-ui, -apple-system, sans-serif;
+  background-color: var(--color-bg);
+  color: var(--color-fg);
+}
+
+/* Tabular/monospaced figures everywhere numbers/metrics appear (px, %, hex,
+   selectors, breakpoints) — the "technical dashboard" type signature. */
+.font-mono,
+code,
+kbd,
+pre {
+  font-family: 'Fira Code', ui-monospace, SFMono-Regular, monospace;
+  font-feature-settings: 'tnum' 1, 'zero' 1;
 }
 
 ::-webkit-scrollbar {
@@ -17,9 +31,48 @@ body {
   height: 10px;
 }
 ::-webkit-scrollbar-track {
-  background: #121218;
+  background: var(--color-bg);
 }
 ::-webkit-scrollbar-thumb {
-  background: #33333f;
+  background: var(--color-elevated);
   border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border);
+}
+
+/* Visible keyboard focus everywhere — never rely on browser default alone. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* All interactive elements read as clickable. */
+button:not(:disabled),
+[role='button']:not([aria-disabled='true']),
+[role='switch'],
+[role='tab'],
+a,
+summary,
+input[type='checkbox'],
+input[type='radio'] {
+  cursor: pointer;
+}
+button:disabled,
+[aria-disabled='true'] {
+  cursor: not-allowed;
+}
+
+/* Motion dial 3/10 (subtle): respect the user's OS-level preference and
+   collapse everything to near-instant when reduced motion is requested. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue';
+import { Check, Copy, Download } from 'lucide-vue-next';
 
 const props = defineProps<{ prompt: string }>();
 
@@ -29,25 +30,32 @@ function downloadMd() {
 </script>
 
 <template>
-  <div class="sticky bottom-4 rounded-xl border border-base-700 bg-base-900 p-5 shadow-xl">
+  <div class="rounded-lg border border-border-hairline bg-surface p-4 shadow-soft-xl">
     <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-      <h3 class="text-lg font-semibold">Промпт для Claude</h3>
+      <h3 class="text-sm font-semibold text-fg">Промпт для Claude</h3>
       <div class="flex gap-2">
-        <button type="button" class="rounded-md bg-base-800 px-3 py-1.5 text-sm hover:bg-base-700" @click="downloadMd">
+        <button
+          type="button"
+          class="inline-flex items-center gap-1.5 rounded-md border border-border-hairline px-3 py-1.5 text-sm text-fg-subtle transition-colors duration-fast ease-standard hover:border-border hover:text-fg-muted"
+          @click="downloadMd"
+        >
+          <Download :size="14" aria-hidden="true" />
           Сохранить .md
         </button>
         <button
           type="button"
-          class="rounded-md bg-indigo-500 px-3 py-1.5 text-sm text-white hover:bg-indigo-400"
+          class="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-on transition-colors duration-fast ease-standard hover:bg-accent-hover"
           @click="copyToClipboard"
         >
+          <Check v-if="copied" :size="14" aria-hidden="true" />
+          <Copy v-else :size="14" aria-hidden="true" />
           {{ copied ? 'Скопировано' : 'Скопировать' }}
         </button>
       </div>
     </div>
     <textarea
       readonly
-      class="h-64 w-full resize-y rounded-lg border border-base-700 bg-base-950 p-3 font-mono text-xs text-slate-300"
+      class="h-56 w-full resize-y rounded-md border border-border-hairline bg-bg p-3 font-mono text-xs text-fg-muted outline-none focus:border-accent"
       :value="prompt"
     />
   </div>

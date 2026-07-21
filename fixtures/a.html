@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<title>Fixture A — Reference</title>
+<style>
+  :root {
+    --primary: #0f62fe;
+    --text: #101828;
+    --bg: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: Georgia, 'Times New Roman', serif;
+    color: var(--text);
+    background: var(--bg);
+  }
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+  header {
+    background: var(--primary);
+    color: #ffffff;
+    padding: 20px 0;
+  }
+  header .container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header .logo {
+    font-weight: 700;
+    font-size: 22px;
+  }
+  nav ul {
+    list-style: none;
+    display: flex;
+    gap: 24px;
+    margin: 0;
+    padding: 0;
+  }
+  nav a {
+    color: #ffffff;
+    text-decoration: none;
+    font-size: 16px;
+  }
+  main {
+    padding: 64px 0;
+  }
+  h1 {
+    font-size: 48px;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-weight: 700;
+    line-height: 1.2;
+    margin: 0 0 16px;
+  }
+  p {
+    font-size: 18px;
+    line-height: 1.6;
+    color: #475467;
+    max-width: 640px;
+  }
+  .btn {
+    display: inline-block;
+    margin-top: 24px;
+    padding: 14px 32px;
+    background: var(--primary);
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+  }
+  section.features {
+    padding: 48px 0;
+    background: #f9fafb;
+  }
+  section.features .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+  }
+  .card {
+    background: #ffffff;
+    border: 1px solid #eaecf0;
+    border-radius: 8px;
+    padding: 24px;
+  }
+  .card h3 {
+    margin: 0 0 8px;
+    font-size: 20px;
+  }
+  .card p {
+    font-size: 15px;
+    margin: 0;
+  }
+  footer {
+    background: #101828;
+    color: #d0d5dd;
+    padding: 32px 0;
+    font-size: 14px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <div class="logo">Reference Co.</div>
+      <nav>
+        <ul>
+          <li><a href="#">Продукт</a></li>
+          <li><a href="#">Цены</a></li>
+          <li><a href="#">О нас</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+  <main>
+    <div class="container">
+      <h1>Дизайн, который продаёт</h1>
+      <p>Эталонная страница для сравнения дизайна. Здесь задан оригинальный набор цветов, шрифтов и отступов, с которым будет сверяться целевой сайт.</p>
+      <a class="btn" href="#">Начать бесплатно</a>
+    </div>
+  </main>
+  <section class="features">
+    <div class="container">
+      <div class="grid">
+        <div class="card">
+          <h3>Быстро</h3>
+          <p>Секундная загрузка страниц и мгновенный отклик интерфейса.</p>
+        </div>
+        <div class="card">
+          <h3>Надёжно</h3>
+          <p>Инфраструктура, проверенная временем и нагрузкой.</p>
+        </div>
+        <div class="card">
+          <h3>Просто</h3>
+          <p>Минимум действий для достижения результата.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+  <footer>
+    <div class="container">© 2026 Reference Co. Все права защищены.</div>
+  </footer>
+</body>
+</html>

@@ -1,6 +1,34 @@
 // Shared types for the design-diff backend and API contract.
 
-export type ReferenceType = 'url' | 'image';
+export type ReferenceType = 'url' | 'image' | 'figma';
+
+// --- Feature 1: capture robustness options ---------------------------------
+
+export type WaitUntilOption = 'load' | 'domcontentloaded' | 'networkidle';
+
+export interface CaptureCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path?: string;
+}
+
+export interface CaptureAuth {
+  cookies?: CaptureCookie[];
+  headers?: Record<string, string>;
+  httpCredentials?: { username: string; password: string };
+}
+
+export interface AdvancedCaptureOptions {
+  hideSelectors?: string[];
+  dismissSelectors?: string[];
+  waitUntil?: WaitUntilOption;
+  waitMs?: number;
+  waitForSelector?: string;
+  freezeAnimations?: boolean;
+  auth?: CaptureAuth;
+  clipSelector?: string;
+}
 
 export interface CompareRequest {
   referenceType: ReferenceType;
@@ -8,16 +36,22 @@ export interface CompareRequest {
   targetUrl: string;
   breakpoints: number[];
   fullPage: boolean;
+  advanced?: AdvancedCaptureOptions;
+  figmaUrl?: string;
 }
 
 export interface HotRegion {
-  col: number;
-  row: number;
-  fraction: number;
+  // Feature 2: hot regions are now connected-component bounding boxes over
+  // the pixelmatch diff mask, not grid cells — col/row/fraction are no
+  // longer produced (kept optional only for backward-compat of old payloads).
+  col?: number;
+  row?: number;
+  fraction?: number;
   xPct: number;
   yPct: number;
   wPct: number;
   hPct: number;
+  areaPct: number;
 }
 
 export type StyleDiffCategory = 'color' | 'typography' | 'spacing' | 'layout';
@@ -29,6 +63,41 @@ export interface StyleDiffEntry {
   target: string | number;
 }
 
+// --- Feature 2: per-element structured diff --------------------------------
+
+export interface ElementBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface GeometryDelta {
+  dx: number;
+  dy: number;
+  dw: number;
+  dh: number;
+  significant: boolean;
+}
+
+export interface ElementStyleDelta {
+  prop: string;
+  reference: string;
+  target: string;
+}
+
+export type ElementDiffStatus = 'matched' | 'missing' | 'extra';
+
+export interface ElementDiffEntry {
+  key: string;
+  label: string;
+  status: ElementDiffStatus;
+  geometryDelta?: GeometryDelta;
+  styleDeltas: ElementStyleDelta[];
+  refBox?: ElementBox;
+  targetBox?: ElementBox;
+}
+
 export interface BreakpointResult {
   breakpoint: number;
   score: number;
@@ -37,6 +106,7 @@ export interface BreakpointResult {
   diffImg: string;
   hotRegions: HotRegion[];
   styleDiff: StyleDiffEntry[];
+  elementDiffs: ElementDiffEntry[];
   error?: undefined;
 }
 
@@ -96,9 +166,32 @@ export interface LayoutLandmark {
   height: number;
 }
 
+export interface RawElementInfo {
+  tag: string;
+  role: string;
+  text: string;
+  nthOfType: number;
+  cssPath: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+  backgroundColor: string;
+  fontFamily: string;
+  fontSize: string;
+  fontWeight: string;
+  lineHeight: string;
+  padding: string;
+  margin: string;
+  borderRadius: string;
+  textAlign: string;
+}
+
 export interface DesignSnapshot {
   palette: PaletteEntry[];
   typography: TypographyEntry[];
   spacing: SpacingEntry[];
   layout: LayoutLandmark[];
+  elements: RawElementInfo[];
 }

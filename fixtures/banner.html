@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<title>Fixture — cookie banner + animation</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Arial, Helvetica, sans-serif; background: #ffffff; }
+  .hero {
+    padding: 60px 20px;
+    text-align: center;
+  }
+  .hero h1 { font-size: 32px; color: #101828; margin: 0 0 24px; }
+  .pulse-btn {
+    display: inline-block;
+    padding: 14px 32px;
+    background: #0f62fe;
+    color: #ffffff;
+    border-radius: 6px;
+    text-decoration: none;
+    font-weight: 600;
+    animation: pulse 0.6s infinite;
+  }
+  @keyframes pulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.2); }
+    100% { transform: scale(1); }
+  }
+  #cookie-banner {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: #101828;
+    color: #ffffff;
+    padding: 16px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    z-index: 9999;
+  }
+  #cookie-banner button {
+    background: #0f62fe;
+    border: none;
+    color: #ffffff;
+    padding: 10px 20px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+  <div class="hero">
+    <h1>Fixture — баннер cookie и анимация</h1>
+    <a class="pulse-btn" href="#">Кнопка с пульсацией</a>
+  </div>
+  <div id="cookie-banner">
+    <span>Этот сайт использует cookie-файлы для улучшения работы.</span>
+    <button id="accept-cookies" onclick="document.getElementById('cookie-banner').style.display='none'">Принять</button>
+  </div>
+</body>
+</html>

@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
@@ -11,13 +12,16 @@ import type { Browser } from 'playwright';
 import { launchBrowser, openPage, screenshot } from './capture.js';
 import { normalizeUrlPair, normalizeImageAgainstTarget } from './normalize.js';
 import { computeDiff } from './diff.js';
-import { captureDesignSnapshot, diffDesignSnapshots } from './styles.js';
+import { captureDesignSnapshot, diffDesignSnapshots, diffElements } from './styles.js';
 import { buildClaudePrompt } from './prompt.js';
+import { fetchFigmaReferenceImage, FigmaConfigError, FigmaApiError } from './figma.js';
 import type {
+  AdvancedCaptureOptions,
   BreakpointOutcome,
   BreakpointResult,
   CompareResponse,
   DesignSnapshot,
+  ElementDiffEntry,
   ReferenceType,
   StyleDiffEntry,
 } from './types.js';
@@ -34,16 +38,62 @@ const PORT = Number(process.env.PORT ?? 3000);
 const app = express();
 app.use(cors());
 app.use('/runs', express.static(RUNS_DIR));
+
+// Fixture route for Feature 1 verification: serves different markup based on
+// a request header or cookie, to prove that captured content actually
+// changes when auth headers/cookies are applied during capture.
+app.get('/fixtures/gated', (req, res) => {
+  const cookieHeader = req.headers.cookie ?? '';
+  const grantedByCookie = /(?:^|;\s*)auth=granted(?:;|$)/.test(cookieHeader);
+  const grantedByHeader = req.headers['x-fixture-auth'] === 'granted';
+  const granted = grantedByCookie || grantedByHeader;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(
+    granted
+      ? '<!doctype html><html lang="ru"><body style="margin:0;font-family:Arial,sans-serif;padding:40px;"><h1 id="gated-heading">Доступ разрешён</h1><p>granted-content-marker</p></body></html>'
+      : '<!doctype html><html lang="ru"><body style="margin:0;font-family:Arial,sans-serif;padding:40px;background:#eee;"><h1 id="gated-heading">Доступ закрыт</h1><p>denied-content-marker</p></body></html>',
+  );
+});
+
 app.use('/fixtures', express.static(FIXTURES_DIR));
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
 // --- Validation ---------------------------------------------------------
 
+const WAIT_UNTIL_VALUES = ['load', 'domcontentloaded', 'networkidle'] as const;
+
+const advancedOptionsSchema = z.object({
+  hideSelectors: z.array(z.string().min(1)).optional(),
+  dismissSelectors: z.array(z.string().min(1)).optional(),
+  waitUntil: z.enum(WAIT_UNTIL_VALUES).optional(),
+  waitMs: z.number().int().min(0).max(60000).optional(),
+  waitForSelector: z.string().min(1).optional(),
+  freezeAnimations: z.boolean().optional(),
+  auth: z
+    .object({
+      cookies: z
+        .array(
+          z.object({
+            name: z.string().min(1),
+            value: z.string(),
+            domain: z.string().min(1),
+            path: z.string().optional(),
+          }),
+        )
+        .optional(),
+      headers: z.record(z.string()).optional(),
+      httpCredentials: z.object({ username: z.string(), password: z.string() }).optional(),
+    })
+    .optional(),
+  clipSelector: z.string().min(1).optional(),
+});
+
 const compareBodySchema = z
   .object({
-    referenceType: z.enum(['url', 'image']),
+    referenceType: z.enum(['url', 'image', 'figma']),
     referenceUrl: z.string().url().optional(),
+    figmaUrl: z.string().url().optional(),
     targetUrl: z.string().url(),
     breakpoints: z
       .string()
@@ -61,10 +111,30 @@ const compareBodySchema = z
       .string()
       .optional()
       .transform((s) => s === 'true'),
+    advanced: z
+      .string()
+      .optional()
+      .transform((s, ctx) => {
+        if (!s || s.trim() === '') return undefined;
+        try {
+          const parsed = JSON.parse(s);
+          return advancedOptionsSchema.parse(parsed);
+        } catch (err) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `advanced must be a JSON object matching AdvancedCaptureOptions: ${err instanceof Error ? err.message : String(err)}`,
+          });
+          return z.NEVER;
+        }
+      }),
   })
   .refine((data) => data.referenceType !== 'url' || !!data.referenceUrl, {
     message: 'referenceUrl is required when referenceType is "url"',
     path: ['referenceUrl'],
+  })
+  .refine((data) => data.referenceType !== 'figma' || !!data.figmaUrl, {
+    message: 'figmaUrl is required when referenceType is "figma"',
+    path: ['figmaUrl'],
   });
 
 // --- Run id ---------------------------------------------------------------
@@ -97,42 +167,46 @@ interface BreakpointContext {
   targetUrl: string;
   fullPage: boolean;
   referenceImageBuffer: Buffer | undefined;
+  advanced: AdvancedCaptureOptions | undefined;
 }
 
 async function processBreakpoint(ctx: BreakpointContext): Promise<BreakpointOutcome> {
-  const { browser, bp, runDir, runId, referenceType, referenceUrl, targetUrl, fullPage, referenceImageBuffer } = ctx;
+  const { browser, bp, runDir, runId, referenceType, referenceUrl, targetUrl, fullPage, referenceImageBuffer, advanced } = ctx;
   const viewport = { width: bp, height: 900 };
+  const clipSelector = advanced?.clipSelector;
 
   try {
     let targetPng: Buffer;
     let refPng: Buffer;
     let styleDiff: StyleDiffEntry[] = [];
+    let elementDiffs: ElementDiffEntry[] = [];
 
     if (referenceType === 'url') {
       const [targetOpened, refOpened] = await Promise.all([
-        openPage(browser, targetUrl, viewport),
-        openPage(browser, referenceUrl as string, viewport),
+        openPage(browser, targetUrl, viewport, advanced),
+        openPage(browser, referenceUrl as string, viewport, advanced),
       ]);
       try {
-        const targetPngResult = await screenshot(targetOpened.page, fullPage);
+        const targetPngResult = await screenshot(targetOpened.page, fullPage, clipSelector);
         const targetSnapshot: DesignSnapshot = await captureDesignSnapshot(targetOpened.page);
-        const refPngResult = await screenshot(refOpened.page, fullPage);
+        const refPngResult = await screenshot(refOpened.page, fullPage, clipSelector);
         const refSnapshot: DesignSnapshot = await captureDesignSnapshot(refOpened.page);
 
         targetPng = targetPngResult;
         refPng = refPngResult;
         styleDiff = diffDesignSnapshots(refSnapshot, targetSnapshot);
+        elementDiffs = diffElements(refSnapshot, targetSnapshot);
       } finally {
         await Promise.all([targetOpened.close(), refOpened.close()]);
       }
     } else {
-      const targetOpened = await openPage(browser, targetUrl, viewport);
+      const targetOpened = await openPage(browser, targetUrl, viewport, advanced);
       try {
-        targetPng = await screenshot(targetOpened.page, fullPage);
+        targetPng = await screenshot(targetOpened.page, fullPage, clipSelector);
       } finally {
         await targetOpened.close();
       }
-      // shortcut: same uploaded mockup reused as reference for every breakpoint
+      // shortcut: same reference image (uploaded or Figma-rendered) reused for every breakpoint
       refPng = await sharp(referenceImageBuffer as Buffer)
         .png()
         .toBuffer();
@@ -159,6 +233,7 @@ async function processBreakpoint(ctx: BreakpointContext): Promise<BreakpointOutc
       diffImg: `/runs/${runId}/${diffFile}`,
       hotRegions: diffResult.hotRegions,
       styleDiff,
+      elementDiffs,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -174,11 +249,31 @@ app.post('/api/compare', upload.single('image'), async (req, res) => {
     res.status(400).json({ error: 'Invalid request', issues: parsed.error.issues });
     return;
   }
-  const { referenceType, referenceUrl, targetUrl, breakpoints, fullPage } = parsed.data;
+  const { referenceType, referenceUrl, figmaUrl, targetUrl, breakpoints, fullPage, advanced } = parsed.data;
 
   if (referenceType === 'image' && !req.file) {
     res.status(400).json({ error: 'image file is required when referenceType is "image"' });
     return;
+  }
+
+  // Resolve the static reference image up front (once per request, not per
+  // breakpoint) so a bad Figma URL / missing token fails fast with a clean
+  // 400 instead of erroring out on every breakpoint individually.
+  let referenceImageBuffer: Buffer | undefined;
+  if (referenceType === 'image') {
+    referenceImageBuffer = req.file!.buffer;
+  } else if (referenceType === 'figma') {
+    try {
+      referenceImageBuffer = await fetchFigmaReferenceImage(figmaUrl as string);
+    } catch (err) {
+      if (err instanceof FigmaConfigError || err instanceof FigmaApiError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ error: `Не удалось получить рендер из Figma: ${message}` });
+      return;
+    }
   }
 
   const runId = makeRunId(targetUrl);
@@ -201,7 +296,8 @@ app.post('/api/compare', upload.single('image'), async (req, res) => {
         referenceUrl,
         targetUrl,
         fullPage,
-        referenceImageBuffer: req.file?.buffer,
+        referenceImageBuffer,
+        advanced,
       });
       outcomes.push(outcome);
     }
@@ -213,7 +309,7 @@ app.post('/api/compare', upload.single('image'), async (req, res) => {
     const responseWithoutPrompt: Omit<CompareResponse, 'claudePrompt'> = {
       runId,
       referenceType,
-      referenceUrl: referenceType === 'url' ? (referenceUrl as string) : null,
+      referenceUrl: referenceType === 'url' ? (referenceUrl as string) : referenceType === 'figma' ? (figmaUrl as string) : null,
       targetUrl,
       breakpoints: outcomes,
       summary: { avgScore, worstBreakpoint: worst ? worst.breakpoint : null },

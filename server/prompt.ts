@@ -1,4 +1,11 @@
-import type { BreakpointError, BreakpointResult, CompareResponse, HotRegion, StyleDiffEntry } from './types.js';
+import type {
+  BreakpointError,
+  BreakpointResult,
+  CompareResponse,
+  ElementDiffEntry,
+  HotRegion,
+  StyleDiffEntry,
+} from './types.js';
 import { isBreakpointError } from './types.js';
 
 export type PromptInput = Omit<CompareResponse, 'claudePrompt'>;
@@ -11,15 +18,15 @@ const CATEGORY_LABEL_RU: Record<StyleDiffEntry['category'], string> = {
   layout: 'Layout / позиционирование',
 };
 
-function describeHotRegions(regions: HotRegion[], gridCols: number, gridRows: number): string {
+function describeHotRegions(regions: HotRegion[]): string {
   if (regions.length === 0) return 'заметных сконцентрированных зон различий не обнаружено';
 
   const words = new Set<string>();
   for (const r of regions) {
-    const colFrac = gridCols > 1 ? r.col / (gridCols - 1) : 0;
-    const rowFrac = gridRows > 1 ? r.row / (gridRows - 1) : 0;
-    const horiz = colFrac < 0.34 ? 'слева' : colFrac < 0.67 ? 'по центру' : 'справа';
-    const vert = rowFrac < 0.34 ? 'сверху' : rowFrac < 0.67 ? 'в середине' : 'снизу';
+    const centerXPct = r.xPct + r.wPct / 2;
+    const centerYPct = r.yPct + r.hPct / 2;
+    const horiz = centerXPct < 34 ? 'слева' : centerXPct < 67 ? 'по центру' : 'справа';
+    const vert = centerYPct < 34 ? 'сверху' : centerYPct < 67 ? 'в середине' : 'снизу';
     words.add(`${vert} ${horiz}`);
   }
   return Array.from(words).join(', ');
@@ -43,6 +50,34 @@ function formatStyleDiffBullets(entries: StyleDiffEntry[]): string[] {
   return lines;
 }
 
+const GEOMETRY_LABELS: { key: 'dx' | 'dy' | 'dw' | 'dh'; describe: (v: number) => string }[] = [
+  { key: 'dx', describe: (v) => `сдвинут по горизонтали на ${v > 0 ? '+' : ''}${v}px` },
+  { key: 'dy', describe: (v) => `сдвинут по вертикали на ${v > 0 ? '+' : ''}${v}px` },
+  { key: 'dw', describe: (v) => `ширина отличается на ${v > 0 ? '+' : ''}${v}px` },
+  { key: 'dh', describe: (v) => `высота отличается на ${v > 0 ? '+' : ''}${v}px` },
+];
+
+/** Formats one `elementDiffs` entry as a surgical, single-line bullet. */
+function formatElementDiffLine(e: ElementDiffEntry): string {
+  if (e.status === 'missing') {
+    return `- ОТСУТСТВУЕТ в целевом сайте: ${e.label} (был в референсе на позиции x=${e.refBox?.x}, y=${e.refBox?.y})`;
+  }
+  if (e.status === 'extra') {
+    return `- ЛИШНИЙ элемент в целевом сайте (нет в референсе): ${e.label} (позиция x=${e.targetBox?.x}, y=${e.targetBox?.y})`;
+  }
+
+  const parts: string[] = [];
+  for (const s of e.styleDeltas) {
+    parts.push(`${s.prop} \`${s.target}\`→\`${s.reference}\``);
+  }
+  if (e.geometryDelta?.significant) {
+    const g = e.geometryDelta;
+    const geomParts = GEOMETRY_LABELS.filter(({ key }) => Math.abs(g[key]) > 3).map(({ key, describe }) => describe(g[key]));
+    parts.push(...geomParts);
+  }
+  return `- ${e.label}: ${parts.join('; ')}`;
+}
+
 function scoreBadge(score: number): string {
   const pct = Math.round(score * 100);
   if (pct >= 95) return `${pct}% (хорошо)`;
@@ -59,7 +94,7 @@ export function buildClaudePrompt(run: PromptInput): string {
   lines.push('');
   lines.push('## Контекст');
   lines.push(
-    `- Референс: ${run.referenceType === 'url' ? run.referenceUrl : 'загруженное изображение (мокап)'}`,
+    `- Референс: ${run.referenceType === 'url' ? run.referenceUrl : run.referenceType === 'figma' ? `Figma (${run.referenceUrl})` : 'загруженное изображение (мокап)'}`,
   );
   lines.push(`- Целевой сайт: ${run.targetUrl}`);
   lines.push(`- Брейкпоинты: ${run.breakpoints.map((b) => b.breakpoint).join(', ')}px`);
@@ -78,12 +113,20 @@ export function buildClaudePrompt(run: PromptInput): string {
   lines.push('');
   for (const bp of sorted) {
     lines.push(`### ${bp.breakpoint}px — совпадение ${scoreBadge(bp.score)}`);
-    lines.push(`- Зона концентрации различий: ${describeHotRegions(bp.hotRegions, 6, 4)}`);
+    lines.push(`- Зона концентрации различий: ${describeHotRegions(bp.hotRegions)} (${bp.hotRegions.length} обл.)`);
     lines.push(`- Изображения: \`${bp.refImg}\` (референс), \`${bp.targetImg}\` (цель), \`${bp.diffImg}\` (diff)`);
+
+    if (bp.elementDiffs.length > 0) {
+      lines.push('- Расхождения по элементам (surgical, приоритет — сверху):');
+      for (const e of bp.elementDiffs) {
+        lines.push(`  ${formatElementDiffLine(e)}`);
+      }
+    }
+
     if (bp.styleDiff.length > 0) {
-      lines.push('- Конкретные расхождения стилей:');
+      lines.push('- Агрегированные расхождения стилей страницы (палитра/типографика/отступы/layout):');
       lines.push(...formatStyleDiffBullets(bp.styleDiff));
-    } else {
+    } else if (bp.elementDiffs.length === 0) {
       lines.push(
         '- Структурированный style-diff недоступен для этой пары (референс — изображение, а не URL); ориентируйтесь на diff-изображение и hot-зоны выше.',
       );
@@ -99,8 +142,14 @@ export function buildClaudePrompt(run: PromptInput): string {
     lines.push('');
   }
 
-  lines.push('## Чеклист исправлений (приоритет: цвета → типографика → отступы → layout)');
+  lines.push('## Чеклист исправлений (приоритет: цвета → типографика → отступы → layout, худший брейкпоинт — первым)');
   let checklistIndex = 1;
+  for (const bp of sorted) {
+    for (const e of bp.elementDiffs) {
+      lines.push(`${checklistIndex}. [${bp.breakpoint}px] ${formatElementDiffLine(e).replace(/^-\s*/, '')}`);
+      checklistIndex++;
+    }
+  }
   for (const bp of sorted) {
     if (bp.styleDiff.length === 0) continue;
     const byCategory = new Map<StyleDiffEntry['category'], StyleDiffEntry[]>();
@@ -113,7 +162,7 @@ export function buildClaudePrompt(run: PromptInput): string {
       if (!items) continue;
       for (const item of items) {
         lines.push(
-          `${checklistIndex}. [${bp.breakpoint}px, ${CATEGORY_LABEL_RU[cat]}] ${item.label}: изменить с \`${item.target}\` на \`${item.reference}\``,
+          `${checklistIndex}. [${bp.breakpoint}px, ${CATEGORY_LABEL_RU[cat]}, агрегат] ${item.label}: изменить с \`${item.target}\` на \`${item.reference}\``,
         );
         checklistIndex++;
       }
@@ -121,7 +170,7 @@ export function buildClaudePrompt(run: PromptInput): string {
   }
   if (checklistIndex === 1) {
     lines.push(
-      '- Структурированных style-diff расхождений нет (сравнение по изображению) — используйте diff-изображения и hot-зоны выше как ориентир для правок вёрстки и стилей.',
+      '- Структурированных расхождений (ни по элементам, ни агрегированных) нет (сравнение по изображению) — используйте diff-изображения и hot-зоны выше как ориентир для правок вёрстки и стилей.',
     );
   }
 

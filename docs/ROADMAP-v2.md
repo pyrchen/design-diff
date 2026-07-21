@@ -121,6 +121,33 @@ export interface DiffProvenance {
   full page). Job owns one Browser; bounded breakpoint concurrency (default 2–3, no new dep).
 - SSE recommended over WebSocket/polling (native to Express, no new dep, server→client only).
 
+## Settings / secrets (Wave 1 tail) — "remember on this device", no accounts
+Server-side, gitignored store. Two tiers, resolved per token need in this order:
+**explicit request value → session → persisted → `.env` (`FIGMA_TOKEN` back-compat)**.
+- **session (guest):** in-memory `Map<sessionId, Secrets>`, keyed by an HTTP-only `dd_sid`
+  cookie (SameSite=Lax) set on first request; cleared on restart; never written to disk.
+- **persisted ("remember on this device"):** gitignored `.secrets.json` at project root, keyed
+  by `profileId` (default `"local"` — the seam for future accounts). Loaded on startup.
+
+```ts
+export interface NamedToken { id:string; label:string; kind:'bearer'|'header'|'cookie'|'raw'; value:string; headerName?:string; domain?:string; }
+export interface Secrets { figmaToken?:string; tokens?:NamedToken[]; }
+// masked view — safe to send to the client (never returns raw values):
+export interface SecretsView { figmaToken:{set:boolean; last4?:string}; tokens:Array<Omit<NamedToken,'value'>&{last4:string}>; remember:boolean; }
+```
+- `GET /api/settings` → `SecretsView` (masked: set/not-set + last4).
+- `PUT /api/settings` → `{ figmaToken?:string|null; tokens?:NamedToken[]; remember:boolean }`.
+  `remember=true` persists to `.secrets.json` (profile "local"); `false` → session only;
+  `figmaToken:null` clears it. Never log values.
+- `DELETE /api/settings/tokens/:id`.
+- Wiring: `server/figma.ts` token lookup uses the resolution order above (not `.env`-only). Per-side
+  `auth` may carry `{ tokenId }` → server resolves the saved token into headers/cookies/credentials.
+- Security: `.secrets.json` in `.gitignore`; values only to their own service; never to logs/git/net.
+  `// shortcut: plaintext local secret file (mirrors .env), upgrade to OS keychain if multi-user`.
+- Frontend: a Settings panel (gear in `CommandBar`) — masked Figma-token field (set/clear), named-
+  tokens list (add/edit/remove by kind), a "Запомнить на этом устройстве" toggle; the per-side auth
+  panel gains a "use saved token" picker.
+
 ## Component reuse ledger (frontend)
 Reuse as-is: `OverlaySlider`, `ElementDiffList`, `RegistrationMark`. Reuse+relocate:
 `CompareForm`, `CaptureAuthPanel`, `PromptPanel`. Evolve: `TopBar`→`CommandBar`. Split:

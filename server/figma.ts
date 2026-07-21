@@ -160,8 +160,15 @@ async function downloadImageBuffer(imageUrl: string): Promise<Buffer> {
 /**
  * End-to-end: figma.com URL -> PNG buffer of the referenced (or first
  * top-level) frame, rendered by Figma itself at 2x scale.
+ *
+ * Settings/secrets (Wave 1 tail): `preResolvedToken`, when given, is used
+ * as-is (the caller — index.ts — already ran the explicit -> session ->
+ * persisted -> .env resolution order via server/secrets.ts). When omitted,
+ * falls back to the original .env-only getFigmaToken() lookup, so this
+ * function (and figma.test.ts, which calls getFigmaToken() directly) keeps
+ * working unchanged for any caller that hasn't adopted the secrets store.
  */
-export async function fetchFigmaReferenceImage(figmaUrl: string): Promise<Buffer> {
+export async function fetchFigmaReferenceImage(figmaUrl: string, preResolvedToken?: string): Promise<Buffer> {
   const parsed = parseFigmaUrl(figmaUrl);
   if (!parsed) {
     throw new FigmaConfigError(
@@ -169,7 +176,7 @@ export async function fetchFigmaReferenceImage(figmaUrl: string): Promise<Buffer
     );
   }
 
-  const token = getFigmaToken();
+  const token = preResolvedToken && preResolvedToken.trim() ? preResolvedToken : getFigmaToken();
   const nodeId = parsed.nodeId ?? (await resolveFirstTopLevelFrameId(parsed.fileKey, token));
   const imageUrl = await fetchRenderedImageUrl(parsed.fileKey, nodeId, token);
   return downloadImageBuffer(imageUrl);

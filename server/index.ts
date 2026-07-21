@@ -10,7 +10,16 @@ import { z } from 'zod';
 import { fetchFigmaReferenceImage, FigmaConfigError, FigmaApiError } from './figma.js';
 import { createJob, getJob, requestCancel, runJob, setReferenceImageBuffer, subscribeJob } from './jobs.js';
 import type { RunJobParams } from './jobs.js';
-import type { CaptureOptions, CompareResponse, JobEvent, StateManifest } from './types.js';
+import {
+  DEFAULT_PROFILE_ID,
+  deleteToken,
+  ensureSessionId,
+  getSecretsView,
+  resolveCaptureAuthTokens,
+  resolveFigmaToken,
+  saveSecrets,
+} from './secrets.js';
+import type { CaptureOptions, CompareResponse, JobEvent, NamedToken, StateManifest } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,6 +31,10 @@ const PORT = Number(process.env.PORT ?? 3000);
 
 const app = express();
 app.use(cors());
+// Settings/secrets endpoints (GET/PUT JSON, DELETE no body) need a JSON body
+// parser; /api/compare stays multipart (multer) and is untouched by this —
+// express.json() only engages for requests whose Content-Type is JSON.
+app.use(express.json());
 app.use('/runs', express.static(RUNS_DIR));
 
 // Fixture route for Feature 1 verification: serves different markup based on
@@ -73,6 +86,8 @@ const captureOptionsSchema = z.object({
         .optional(),
       headers: z.record(z.string()).optional(),
       httpCredentials: z.object({ username: z.string(), password: z.string() }).optional(),
+      // Settings/secrets (Wave 1 tail): resolve a saved NamedToken at request time.
+      tokenId: z.string().min(1).optional(),
     })
     .optional(),
   clipSelector: z.string().min(1).optional(),
@@ -236,13 +251,28 @@ app.post('/api/compare', upload.single('image'), async (req, res) => {
     return;
   }
 
+  // Settings/secrets (Wave 1 tail): identify (or provision) this device's
+  // guest session up front — both the Figma-token resolution and the
+  // per-side auth.tokenId resolution below need it.
+  const sessionId = ensureSessionId(req, res);
+
   // Job 1: resolve effective per-side options. A per-side field always wins;
   // the legacy `advanced` block (pre-split, applied to both sides) is only a
   // fallback for whichever side didn't send its own field. referenceCapture
   // only makes sense when the reference itself is a live URL.
-  const effectiveReferenceCaptureOptions: CaptureOptions | undefined =
-    referenceType === 'url' ? (referenceCapture ?? advanced) : undefined;
-  const effectiveTargetCaptureOptions: CaptureOptions | undefined = targetCapture ?? advanced;
+  // Settings/secrets: resolve any auth.tokenId into concrete headers/
+  // cookies/httpCredentials at request time (session -> persisted; a miss
+  // is a no-op, see resolveCaptureAuthTokens).
+  const effectiveReferenceCaptureOptions: CaptureOptions | undefined = resolveCaptureAuthTokens(
+    referenceType === 'url' ? (referenceCapture ?? advanced) : undefined,
+    sessionId,
+    DEFAULT_PROFILE_ID,
+  );
+  const effectiveTargetCaptureOptions: CaptureOptions | undefined = resolveCaptureAuthTokens(
+    targetCapture ?? advanced,
+    sessionId,
+    DEFAULT_PROFILE_ID,
+  );
 
   // Resolve the static reference image up front (once per request, not per
   // breakpoint) so a bad Figma URL / missing token fails fast with a clean
@@ -252,7 +282,12 @@ app.post('/api/compare', upload.single('image'), async (req, res) => {
     referenceImageBuffer = req.file!.buffer;
   } else if (referenceType === 'figma') {
     try {
-      referenceImageBuffer = await fetchFigmaReferenceImage(figmaUrl as string);
+      // Settings/secrets: explicit request value -> session -> persisted -> .env.
+      // This request doesn't carry an explicit figma token field itself, so
+      // resolution starts at the session tier; fetchFigmaReferenceImage
+      // falls back to the legacy .env-only lookup if nothing resolves.
+      const resolvedFigmaToken = resolveFigmaToken(sessionId, DEFAULT_PROFILE_ID);
+      referenceImageBuffer = await fetchFigmaReferenceImage(figmaUrl as string, resolvedFigmaToken);
     } catch (err) {
       if (err instanceof FigmaConfigError || err instanceof FigmaApiError) {
         res.status(400).json({ error: err.message });
@@ -303,6 +338,49 @@ app.post('/api/compare', upload.single('image'), async (req, res) => {
     return;
   }
   res.status(job.status === 'cancelled' ? 499 : 500).json({ error: job.error ?? `Job ended with status "${job.status}"` });
+});
+
+// --- Routes: settings / secrets (Wave 1 tail) -------------------------------
+//
+// Never log req.body or any resolved token/value on these routes — masked
+// views only ever leave this process.
+
+const namedTokenSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  kind: z.enum(['bearer', 'header', 'cookie', 'raw']),
+  value: z.string().min(1),
+  headerName: z.string().min(1).optional(),
+  domain: z.string().min(1).optional(),
+});
+
+const putSettingsBodySchema = z.object({
+  figmaToken: z.union([z.string().min(1), z.null()]).optional(),
+  tokens: z.array(namedTokenSchema).optional(),
+  remember: z.boolean(),
+});
+
+app.get('/api/settings', (req, res) => {
+  const sessionId = ensureSessionId(req, res);
+  res.json(getSecretsView(sessionId, DEFAULT_PROFILE_ID));
+});
+
+app.put('/api/settings', (req, res) => {
+  const parsed = putSettingsBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid request', issues: parsed.error.issues });
+    return;
+  }
+  const sessionId = ensureSessionId(req, res);
+  const { figmaToken, tokens, remember } = parsed.data;
+  saveSecrets({ sessionId, profileId: DEFAULT_PROFILE_ID, figmaToken, tokens: tokens as NamedToken[] | undefined, remember });
+  res.json(getSecretsView(sessionId, DEFAULT_PROFILE_ID));
+});
+
+app.delete('/api/settings/tokens/:id', (req, res) => {
+  const sessionId = ensureSessionId(req, res);
+  deleteToken(req.params.id, sessionId, DEFAULT_PROFILE_ID);
+  res.json(getSecretsView(sessionId, DEFAULT_PROFILE_ID));
 });
 
 // --- Route: GET /api/jobs/:id/events (SSE) ---------------------------------

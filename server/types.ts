@@ -21,6 +21,8 @@ export interface CaptureAuth {
   cookies?: CaptureCookie[];
   headers?: Record<string, string>;
   httpCredentials?: { username: string; password: string };
+  /** Settings/secrets (Wave 1 tail): resolve a saved NamedToken (by id) into headers/cookies/httpCredentials at request time — see server/secrets.ts. */
+  tokenId?: string;
 }
 
 /** Per-side capture + auth options (Job 1: split from the old single "advanced" block). */
@@ -317,6 +319,32 @@ export interface DiffProvenance {
   refHeight: number;
   targetHeight: number;
   capturedAt: number;
+}
+
+// ============================================================================
+// Settings / secrets (Wave 1 tail) — "remember on this device", no accounts.
+// Canonical per docs/ROADMAP-v2.md "Settings / secrets" section.
+// ============================================================================
+
+export interface NamedToken {
+  id: string;
+  label: string;
+  kind: 'bearer' | 'header' | 'cookie' | 'raw';
+  value: string;
+  headerName?: string;
+  domain?: string;
+}
+
+export interface Secrets {
+  figmaToken?: string;
+  tokens?: NamedToken[];
+}
+
+/** Masked view — safe to send to the client (never returns raw values). */
+export interface SecretsView {
+  figmaToken: { set: boolean; last4?: string };
+  tokens: Array<Omit<NamedToken, 'value'> & { last4: string }>;
+  remember: boolean;
 }
 
 // --- Design snapshot types (for url<->url style diffing) ---

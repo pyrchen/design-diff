@@ -3,6 +3,7 @@ runs/
 web/dist/
 dist-server/
 .env
+.secrets.json
 *.log
 npm-debug.log*
 .DS_Store

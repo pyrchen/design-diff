@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { Columns2, Copy as OverlayIcon, History, ScanLine, TriangleAlert } from 'lucide-react';
 import type { Layout } from '../../hooks/useLayout';
@@ -9,7 +9,6 @@ import type { RecentPair } from '../../lib/recentPairs';
 import {
   BOARD_GAP,
   BOARD_H,
-  KIND_META,
   SAMPLE_RECENT_PAIRS,
   SAMPLE_REGIONS,
   SAMPLE_SCORES,
@@ -25,7 +24,6 @@ import { RefBoard } from './RefBoard';
 import { BrowserFrame } from './BrowserFrame';
 import { DiffLayer } from './DiffLayer';
 import { OverlayInspector } from './OverlayInspector';
-import { InspectPin } from './InspectPin';
 import { SelectionRing } from './SelectionRing';
 import { InspectCallout } from './InspectCallout';
 import { ZoomHud } from './ZoomHud';
@@ -132,6 +130,56 @@ export function Canvas(props: CanvasProps) {
   const isOverlay = appState === 'results' && viewMode === 'overlay';
   const isDiff = appState === 'results' && viewMode === 'diff';
   const pinsOn = appState === 'results' && !isOverlay && activeData.kind !== 'error';
+
+  // DevTools-style hover inspection: instead of drawing every element-diff
+  // region at once (unusable once a page has dozens/hundreds of them), only
+  // the region under the cursor gets outlined. Hit-testing walks `regions`
+  // (fractional boxes over the target board) and — for overlapping/nested
+  // blocks — picks the smallest one, same as "pick the deepest element"
+  // in a real DOM inspector. A click on the highlighted region opens the
+  // same point-compare callout the old numbered pins did.
+  const [hovered, setHovered] = useState<number | null>(null);
+  useEffect(() => {
+    setHovered(null);
+  }, [regions]);
+
+  const hitTestAt = useCallback(
+    (clientX: number, clientY: number): number | null => {
+      const area = engine.tgtAreaRef.current;
+      if (!area) return null;
+      const R = area.getBoundingClientRect();
+      if (!R.width || !R.height) return null;
+      const l = (clientX - R.left) / R.width;
+      const t = (clientY - R.top) / R.height;
+      let best: number | null = null;
+      let bestArea = Infinity;
+      regions.forEach((r, i) => {
+        if (l < r.l || l > r.l + r.w || t < r.t || t > r.t + r.h) return;
+        const a = r.w * r.h;
+        if (a < bestArea) {
+          bestArea = a;
+          best = i;
+        }
+      });
+      return best;
+    },
+    [regions, engine.tgtAreaRef],
+  );
+
+  const handleTargetMouseMove = (e: React.MouseEvent) => {
+    if (!pinsOn) return;
+    setHovered(hitTestAt(e.clientX, e.clientY));
+  };
+  const handleTargetMouseLeave = () => setHovered(null);
+  const handleTargetMouseDown = (e: React.MouseEvent) => {
+    if (!pinsOn) return;
+    if (hitTestAt(e.clientX, e.clientY) != null) e.stopPropagation();
+  };
+  const handleTargetClick = (e: React.MouseEvent) => {
+    if (!pinsOn) return;
+    const hit = hitTestAt(e.clientX, e.clientY);
+    if (hit != null) props.onSelectRegion(hit);
+  };
 
   // Gap 4: real state-mismatch banner — mirrors the sample-only (bp===390)
   // demo trigger, but for a real result it's driven by the actual
@@ -445,7 +493,14 @@ export function Canvas(props: CanvasProps) {
                       )}
                     </div>
                     <BrowserFrame label={props.targetFileLabel} height={boardHeight}>
-                      <div ref={engine.tgtAreaRef} style={{ position: 'relative', height: boardHeight }}>
+                      <div
+                        ref={engine.tgtAreaRef}
+                        style={{ position: 'relative', height: boardHeight, cursor: pinsOn && hovered != null ? 'pointer' : undefined }}
+                        onMouseMove={handleTargetMouseMove}
+                        onMouseLeave={handleTargetMouseLeave}
+                        onMouseDown={handleTargetMouseDown}
+                        onClick={handleTargetClick}
+                      >
                         {isOverlay ? (
                           <OverlayInspector
                             splitRef={engine.overlaySplitRef}
@@ -463,6 +518,7 @@ export function Canvas(props: CanvasProps) {
                               isDiffMode={isDiff}
                               regions={regions}
                               selected={selected}
+                              hovered={hovered}
                               onImgLoad={onTargetImgLoad}
                             />
                             {showMismatch && (
@@ -515,17 +571,6 @@ export function Canvas(props: CanvasProps) {
                 />
               </svg>
               <SelectionRing ringRef={engine.ringRef} />
-              {regions.map((r, i) => (
-                <InspectPin
-                  key={i}
-                  n={i + 1}
-                  selected={selected === i}
-                  kindColor={KIND_META[r.kind].color}
-                  title={r.sel}
-                  setRef={engine.setPinRef(i)}
-                  onSelect={() => props.onSelectRegion(i)}
-                />
-              ))}
               {selectedRegion && (
                 <InspectCallout
                   calloutRef={engine.calloutRef}
@@ -572,7 +617,7 @@ export function Canvas(props: CanvasProps) {
                 }}
               >
                 <Mark size={13} strokeWidth={2} />
-                кликните пин, чтобы сверить блок
+наведите на блок и кликните, чтобы сверить
               </div>
             </>
           )}

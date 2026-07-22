@@ -61,7 +61,6 @@ export function useCanvasEngine(params: UseCanvasEngineParams) {
   const ringRef = useRef<HTMLDivElement | null>(null);
   const calloutRef = useRef<HTMLDivElement | null>(null);
   const connLineRef = useRef<SVGLineElement | null>(null);
-  const pinRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const [panning, setPanning] = useState(false);
 
@@ -80,17 +79,6 @@ export function useCanvasEngine(params: UseCanvasEngineParams) {
     if (!area || !vp) return;
     const R = area.getBoundingClientRect();
     const V = vp.getBoundingClientRect();
-
-    regions.forEach((rd, i) => {
-      const el = pinRefs.current[i];
-      if (!el) return;
-      const bx = R.left + rd.l * R.width - V.left;
-      const by = R.top + rd.t * R.height - V.top;
-      const visible = bx > -40 && bx < V.width + 40 && by > -40 && by < V.height + 40;
-      el.style.display = visible ? 'flex' : 'none';
-      el.style.left = `${bx}px`;
-      el.style.top = `${by}px`;
-    });
 
     const ring = ringRef.current;
     const callout = calloutRef.current;
@@ -294,13 +282,6 @@ export function useCanvasEngine(params: UseCanvasEngineParams) {
     window.addEventListener('mouseup', up);
   }, []);
 
-  const setPinRef = useCallback(
-    (i: number) => (el: HTMLButtonElement | null) => {
-      pinRefs.current[i] = el;
-    },
-    [],
-  );
-
   // Mount: staggered fit passes (matches the prototype's [0,160,400]ms
   // schedule — the first pass often runs before fonts/images finish
   // reflowing the board, so later passes correct any residual drift),
@@ -358,7 +339,6 @@ export function useCanvasEngine(params: UseCanvasEngineParams) {
     ringRef,
     calloutRef,
     connLineRef,
-    setPinRef,
     onWheel,
     onCanvasDown,
     stopDown,
